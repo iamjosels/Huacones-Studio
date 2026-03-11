@@ -1,107 +1,314 @@
-﻿using UnityEngine;
-using UnityEngine.UI;
-using TMPro;
-
+﻿using System.Collections;
 using System.Collections.Generic;
+using TMPro;
+using UnityEngine;
+using UnityEngine.UI;
 
 public class DalgonaGameManager : MonoBehaviour
 {
-    [Header("Configuración")]
+    [Header("Configuracion")]
     public RawImage galletaImage;
     public Color colorFigura = new Color32(33, 60, 132, 255);
     public float tolerancia = 0.08f;
 
-    [Tooltip("Texturas por dificultad (ronda 1 = índice 0, etc.)")]
+    [Tooltip("Texturas por dificultad (ronda 1 = indice 0, etc.)")]
     public List<Texture2D> figurasPorRonda;
 
     [Header("UI")]
-    //public TextMeshProUGUI estadoTexto;
+    public bool useStatusText = false;
+    public TextMeshProUGUI statusText;
+    public bool autoFindStatusText = true;
+
+    [Header("Balance")]
+    public int baseAttempts = 3;
+    public int minAttempts = 1;
+    public float toleranceReductionPerRound = 0.015f;
+    public float minimumTolerance = 0.05f;
+    public float retryCooldown = 0.35f;
+
+    [Header("Feedback visual")]
+    public Color neutralTint = Color.white;
+    public Color warningTint = new Color(1f, 0.84f, 0.84f, 1f);
+    public Color successTint = new Color(0.74f, 1f, 0.76f, 1f);
+    public Color invalidClickTint = new Color(1f, 0.95f, 0.75f, 1f);
+    public Color failTint = new Color(1f, 0.55f, 0.55f, 1f);
+    public float flashDuration = 0.16f;
+    public float riskTintStrength = 0.7f;
 
     public System.Action<bool> OnGameFinished;
 
-    private bool juegoActivo = false;
+    private bool juegoActivo;
+    private bool waitingRetryFeedback;
     private int ronda = 1;
+    private int attemptsLeft;
+    private int maxAttemptsThisRound;
+    private float baseTolerance;
     private Texture2D texturaFigura;
+    private Coroutine tintRoutine;
+
+    private void Awake()
+    {
+        baseTolerance = tolerancia;
+
+        if (statusText == null && autoFindStatusText)
+        {
+            statusText = GetComponentInChildren<TextMeshProUGUI>(true);
+        }
+    }
 
     public void SetRound(int r)
     {
-        ronda = Mathf.Clamp(r, 1, figurasPorRonda.Count);
+        ronda = Mathf.Max(1, r);
 
-        // Asignar figura según dificultad
-        if (figurasPorRonda.Count >= ronda)
+        int textureIndex = Mathf.Clamp(ronda - 1, 0, Mathf.Max(0, figurasPorRonda.Count - 1));
+        if (figurasPorRonda.Count > 0)
         {
-            texturaFigura = figurasPorRonda[ronda - 1];
-            galletaImage.texture = texturaFigura;
+            texturaFigura = figurasPorRonda[textureIndex];
+            if (galletaImage != null)
+            {
+                galletaImage.texture = texturaFigura;
+            }
         }
         else
         {
-            Debug.LogWarning("No hay suficientes texturas asignadas para la ronda.");
+            Debug.LogWarning("No hay texturas asignadas para Dalgona.");
         }
 
-        // Reducir tolerancia para mayor dificultad
-        tolerancia = Mathf.Max(0.01f, 0.08f - (ronda - 1) * 0.02f);
+        tolerancia = Mathf.Max(minimumTolerance, baseTolerance - (ronda - 1) * toleranceReductionPerRound);
+        maxAttemptsThisRound = Mathf.Max(minAttempts, baseAttempts - (ronda - 1));
+        attemptsLeft = maxAttemptsThisRound;
+
+        if (juegoActivo)
+        {
+            UpdateAttemptVisual();
+            UpdateStatus("Recorta con cuidado");
+        }
     }
 
-    void OnEnable()
+    private void OnEnable()
     {
-        //estadoTexto.text = "Recorta la figura sin salirte...";
+        if (texturaFigura == null)
+        {
+            SetRound(ronda);
+        }
+
+        if (attemptsLeft <= 0)
+        {
+            maxAttemptsThisRound = Mathf.Max(minAttempts, baseAttempts - (ronda - 1));
+            attemptsLeft = maxAttemptsThisRound;
+        }
+
         juegoActivo = true;
+        waitingRetryFeedback = false;
+
+        if (statusText != null)
+        {
+            statusText.gameObject.SetActive(useStatusText);
+            if (useStatusText)
+            {
+                statusText.fontSize = Mathf.Max(32f, statusText.fontSize);
+                statusText.alignment = TextAlignmentOptions.Center;
+            }
+        }
+
+        UpdateAttemptVisual();
+        UpdateStatus("Recorta con cuidado");
     }
 
-    void Update()
+    private void OnDisable()
     {
-        if (!juegoActivo) return;
+        if (tintRoutine != null)
+        {
+            StopCoroutine(tintRoutine);
+            tintRoutine = null;
+        }
+    }
 
-        // Entrada real del jugador
+    private void Update()
+    {
+        if (!juegoActivo || waitingRetryFeedback)
+        {
+            return;
+        }
+
         if (Input.GetMouseButtonUp(0))
         {
-            if (VerificarRecorte())
+            bool clickedInsideTexture;
+            bool success = VerificarRecorte(out clickedInsideTexture);
+
+            if (success)
             {
-                //estadoTexto.text = "¡Éxito!";
                 juegoActivo = false;
-                OnGameFinished?.Invoke(true);
+                UpdateStatus("Exito");
+                if (tintRoutine != null)
+                {
+                    StopCoroutine(tintRoutine);
+                }
+                tintRoutine = StartCoroutine(FinishWithTint(true));
+                return;
             }
-            else
+
+            if (!clickedInsideTexture)
             {
-                //estadoTexto.text = "¡Fallaste!";
-                juegoActivo = false;
-                OnGameFinished?.Invoke(false);
+                UpdateStatus("Clic dentro de la figura");
+                FlashTint(invalidClickTint);
+                return;
             }
+
+            attemptsLeft--;
+            UpdateAttemptVisual();
+
+            if (attemptsLeft <= 0)
+            {
+                juegoActivo = false;
+                UpdateStatus("Fallaste");
+                if (tintRoutine != null)
+                {
+                    StopCoroutine(tintRoutine);
+                }
+                tintRoutine = StartCoroutine(FinishWithTint(false));
+                return;
+            }
+
+            StartCoroutine(RetryCooldownRoutine());
         }
 
-#if UNITY_EDITOR
-        // Entrada simulada para pruebas con Enter
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
         if (Input.GetKeyDown(KeyCode.Return))
         {
-            Debug.Log("⏩ Simulación automática: Victoria en Dalgona");
             juegoActivo = false;
-            OnGameFinished?.Invoke(true);
+            if (tintRoutine != null)
+            {
+                StopCoroutine(tintRoutine);
+            }
+            tintRoutine = StartCoroutine(FinishWithTint(true));
         }
 #endif
     }
 
-    bool VerificarRecorte()
+    private IEnumerator RetryCooldownRoutine()
     {
-        Vector2 localPos;
-        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(
-            galletaImage.rectTransform, Input.mousePosition, null, out localPos))
+        waitingRetryFeedback = true;
+        UpdateStatus("Intenta de nuevo");
+        FlashTint(warningTint);
+
+        yield return new WaitForSeconds(retryCooldown);
+
+        waitingRetryFeedback = false;
+        if (juegoActivo)
+        {
+            UpdateStatus("Recorta con cuidado");
+        }
+    }
+
+    private IEnumerator FinishWithTint(bool success)
+    {
+        Color target = success ? successTint : failTint;
+        FlashTint(target);
+
+        yield return new WaitForSeconds(flashDuration + 0.08f);
+        OnGameFinished?.Invoke(success);
+    }
+
+    private bool VerificarRecorte(out bool clickedInsideTexture)
+    {
+        clickedInsideTexture = false;
+
+        if (galletaImage == null || texturaFigura == null)
+        {
             return false;
+        }
+
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(galletaImage.rectTransform, Input.mousePosition, null, out Vector2 localPos))
+        {
+            return false;
+        }
 
         Rect rect = galletaImage.rectTransform.rect;
-        Vector2 uv = new Vector2(
-            (localPos.x - rect.x) / rect.width,
-            (localPos.y - rect.y) / rect.height
-        );
+        Vector2 uv = new Vector2((localPos.x - rect.x) / rect.width, (localPos.y - rect.y) / rect.height);
 
-        if (uv.x < 0 || uv.x > 1 || uv.y < 0 || uv.y > 1) return false;
+        if (uv.x < 0f || uv.x > 1f || uv.y < 0f || uv.y > 1f)
+        {
+            return false;
+        }
 
-        int x = Mathf.FloorToInt(uv.x * texturaFigura.width);
-        int y = Mathf.FloorToInt(uv.y * texturaFigura.height);
+        clickedInsideTexture = true;
+
+        int x = Mathf.Clamp(Mathf.FloorToInt(uv.x * texturaFigura.width), 0, texturaFigura.width - 1);
+        int y = Mathf.Clamp(Mathf.FloorToInt(uv.y * texturaFigura.height), 0, texturaFigura.height - 1);
         Color pixel = texturaFigura.GetPixel(x, y);
 
         float diferencia = Vector4.Distance(pixel, colorFigura);
-        Debug.Log($"Dif. color: {diferencia}");
-
         return diferencia <= tolerancia;
+    }
+
+    private void FlashTint(Color tint)
+    {
+        if (galletaImage == null)
+        {
+            return;
+        }
+
+        if (tintRoutine != null)
+        {
+            StopCoroutine(tintRoutine);
+        }
+
+        tintRoutine = StartCoroutine(FlashTintRoutine(tint));
+    }
+
+    private IEnumerator FlashTintRoutine(Color tint)
+    {
+        if (galletaImage == null)
+        {
+            yield break;
+        }
+
+        Color baseColor = ComputeBaseTint();
+        galletaImage.color = tint;
+
+        yield return new WaitForSeconds(flashDuration);
+
+        if (galletaImage != null)
+        {
+            galletaImage.color = baseColor;
+        }
+
+        tintRoutine = null;
+    }
+
+    private void UpdateAttemptVisual()
+    {
+        if (galletaImage == null)
+        {
+            return;
+        }
+
+        if (tintRoutine == null)
+        {
+            galletaImage.color = ComputeBaseTint();
+        }
+    }
+
+    private Color ComputeBaseTint()
+    {
+        if (maxAttemptsThisRound <= 0)
+        {
+            return neutralTint;
+        }
+
+        float attemptsRatio = Mathf.Clamp01(attemptsLeft / (float)maxAttemptsThisRound);
+        float risk = 1f - attemptsRatio;
+        return Color.Lerp(neutralTint, warningTint, risk * riskTintStrength);
+    }
+
+    private void UpdateStatus(string message)
+    {
+        if (!useStatusText || statusText == null)
+        {
+            return;
+        }
+
+        statusText.text = message;
     }
 }

@@ -1,11 +1,17 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
-using TMPro;
 
 public class SimonManager2 : MonoBehaviour
 {
+    public enum FeedbackMode
+    {
+        VisualOnly,
+        VisualWithText
+    }
+
     [Header("Botones de colores")]
     public Button greenButton;
     public Button redButton;
@@ -13,169 +19,501 @@ public class SimonManager2 : MonoBehaviour
     public Button blueButton;
 
     [Header("UI de estado")]
+    public FeedbackMode feedbackMode = FeedbackMode.VisualOnly;
     public TextMeshProUGUI statusText;
 
-    [Header("Parámetros base de dificultad")]
-    public float baseFlashTime = 0.3f;
-    public float baseTimeBetweenFlashes = 0.8f;
-    public int baseMaxTurns = 5;
+    [Header("Dificultad base")]
+    public float baseFlashTime = 0.33f;
+    public float baseTimeBetweenFlashes = 0.85f;
+    public int baseMaxTurns = 4;
+
+    [Header("Escalado por ronda")]
+    public int extraTurnsPerRound = 1;
+    public float flashTimeReductionPerRound = 0.03f;
+    public float betweenFlashesReductionPerRound = 0.07f;
+    public float minFlashTime = 0.2f;
+    public float minTimeBetweenFlashes = 0.35f;
+
+    [Header("Feedback visual")]
+    public float startDelay = 0.75f;
+    public float observeBrightness = 0.52f;
+    public float readyPulseScale = 1.08f;
+    public float readyPulseDuration = 0.12f;
+    public Color successTint = new Color(0.65f, 1f, 0.65f, 1f);
+    public Color failTint = new Color(1f, 0.45f, 0.45f, 1f);
+
+    [Header("Progreso visual")]
+    public Transform progressContainer;
+    public Vector2 progressAnchoredPosition = new Vector2(0f, -58f);
+    public Vector2 progressDotSize = new Vector2(16f, 16f);
+    public float progressSpacing = 10f;
+    public Color dotPendingColor = new Color(1f, 1f, 1f, 0.28f);
+    public Color dotDoneColor = new Color(1f, 1f, 1f, 0.95f);
+
+    private readonly List<Button> availableButtons = new();
+    private readonly List<Button> pattern = new();
+    private readonly List<Button> playerInput = new();
+    private readonly List<Image> progressDots = new();
+    private readonly Dictionary<Button, Color> baseButtonColors = new();
+    private readonly Dictionary<Button, Vector3> baseButtonScales = new();
+
+    private Coroutine activeRoutine;
 
     private float flashTime;
     private float timeBetweenFlashes;
-    private int maxTurns = 5;
+    private int maxTurns;
 
-    private List<Button> pattern = new();
-    private List<Button> playerInput = new();
-    private bool isPlayerTurn = false;
-    private int currentTurn = 0;
+    private bool isPlayerTurn;
+    private bool gameActive;
+    private bool isFlashing;
+    private int currentTurn;
+    private float currentBrightness = 1f;
 
     public System.Action<bool> OnGameFinished;
 
-    private Button[] allButtons;
-    private bool gameActive = false;
-    private bool isFlashing = false;
-
-
     public void SetRound(int gameRound)
     {
-        // Ajustar dificultad basada en la ronda general (del GameManager)
-        maxTurns = baseMaxTurns + (gameRound - 1) * 2;  // Ronda 1 = 5 turnos, Ronda 2 = 7, etc.
-        flashTime = Mathf.Max(0.15f, baseFlashTime - 0.05f * (gameRound - 1));
-        timeBetweenFlashes = Mathf.Max(0.3f, baseTimeBetweenFlashes - 0.1f * (gameRound - 1));
+        int roundIndex = Mathf.Max(0, gameRound - 1);
+        maxTurns = baseMaxTurns + roundIndex * extraTurnsPerRound;
+        flashTime = Mathf.Max(minFlashTime, baseFlashTime - flashTimeReductionPerRound * roundIndex);
+        timeBetweenFlashes = Mathf.Max(minTimeBetweenFlashes, baseTimeBetweenFlashes - betweenFlashesReductionPerRound * roundIndex);
     }
 
-    void Awake()
+    private void Awake()
     {
-        allButtons = new Button[] { greenButton, redButton, yellowButton, blueButton };
-        foreach (Button btn in allButtons)
+        CacheButtons();
+        EnsureProgressContainer();
+    }
+
+    private void OnEnable()
+    {
+        EnsureDefaults();
+        ConfigureStatusText();
+        BuildProgressDots(0);
+        BeginSession();
+    }
+
+    private void OnDisable()
+    {
+        StopActiveRoutine();
+        SetButtonsInteractable(false);
+        ResetButtonVisuals();
+    }
+
+    private void CacheButtons()
+    {
+        availableButtons.Clear();
+        baseButtonColors.Clear();
+        baseButtonScales.Clear();
+
+        Button[] configuredButtons = { greenButton, redButton, yellowButton, blueButton };
+        foreach (Button button in configuredButtons)
         {
-            btn.onClick.AddListener(() => OnButtonClick(btn));
+            if (button == null || button.image == null)
+            {
+                continue;
+            }
+
+            availableButtons.Add(button);
+            baseButtonColors[button] = button.image.color;
+            baseButtonScales[button] = button.transform.localScale;
+
+            Button captured = button;
+            captured.onClick.AddListener(() => OnButtonClick(captured));
         }
     }
 
-    void OnEnable()
+    private void EnsureDefaults()
     {
+        if (maxTurns <= 0)
+        {
+            SetRound(1);
+        }
+    }
+
+    private void ConfigureStatusText()
+    {
+        if (statusText == null)
+        {
+            return;
+        }
+
+        bool useText = feedbackMode == FeedbackMode.VisualWithText;
+        statusText.gameObject.SetActive(useText);
+
+        if (useText)
+        {
+            statusText.fontSize = Mathf.Max(34f, statusText.fontSize);
+            statusText.alignment = TextAlignmentOptions.Center;
+            statusText.alpha = 0.92f;
+        }
+    }
+
+    private void EnsureProgressContainer()
+    {
+        if (progressContainer != null)
+        {
+            return;
+        }
+
+        Canvas rootCanvas = GetComponentInParent<Canvas>();
+        if (rootCanvas == null && availableButtons.Count > 0)
+        {
+            rootCanvas = availableButtons[0].GetComponentInParent<Canvas>();
+        }
+
+        if (rootCanvas == null)
+        {
+            return;
+        }
+
+        GameObject container = new GameObject("SimonProgress", typeof(RectTransform), typeof(HorizontalLayoutGroup));
+        RectTransform rect = container.GetComponent<RectTransform>();
+        rect.SetParent(rootCanvas.transform, false);
+        rect.anchorMin = new Vector2(0.5f, 1f);
+        rect.anchorMax = new Vector2(0.5f, 1f);
+        rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.anchoredPosition = progressAnchoredPosition;
+        rect.sizeDelta = new Vector2(420f, 26f);
+
+        HorizontalLayoutGroup layout = container.GetComponent<HorizontalLayoutGroup>();
+        layout.childAlignment = TextAnchor.MiddleCenter;
+        layout.spacing = progressSpacing;
+        layout.childControlHeight = false;
+        layout.childControlWidth = false;
+        layout.childForceExpandHeight = false;
+        layout.childForceExpandWidth = false;
+
+        progressContainer = rect;
+    }
+
+    private void BeginSession()
+    {
+        StopActiveRoutine();
+
         pattern.Clear();
         playerInput.Clear();
         currentTurn = 0;
-        StartGame();
-    }
-
-    public void StartGame()
-    {
-        pattern.Clear();
-        playerInput.Clear();
-        currentTurn = 0;
-        StartCoroutine(NextTurn());
-    }
-
-    IEnumerator NextTurn()
-    {
         isPlayerTurn = false;
         gameActive = false;
-        isFlashing = true; // ← nuevo
+        isFlashing = false;
+
+        SetButtonsInteractable(false);
+        SetButtonBrightness(observeBrightness);
+        SetStatus("Memoriza el patron");
+
+        activeRoutine = StartCoroutine(BeginAfterDelay());
+    }
+
+    private IEnumerator BeginAfterDelay()
+    {
+        yield return new WaitForSeconds(startDelay);
+        yield return StartCoroutine(NextTurn());
+    }
+
+    private IEnumerator NextTurn()
+    {
+        if (availableButtons.Count == 0)
+        {
+            yield break;
+        }
+
+        isPlayerTurn = false;
+        gameActive = false;
+        isFlashing = true;
+        SetButtonsInteractable(false);
+        SetButtonBrightness(observeBrightness);
 
         playerInput.Clear();
         currentTurn++;
 
         if (currentTurn > maxTurns)
         {
-            statusText.text = "¡Completado!";
-            yield return new WaitForSeconds(1f);
+            SetStatus("Completado");
+            yield return StartCoroutine(FlashAllButtons(successTint, 1));
+            yield return new WaitForSeconds(0.15f);
             OnGameFinished?.Invoke(true);
             yield break;
         }
 
-        // Añadir un nuevo botón al patrón
-        Button nextButton = allButtons[Random.Range(0, allButtons.Length)];
+        Button nextButton = availableButtons[Random.Range(0, availableButtons.Count)];
         pattern.Add(nextButton);
 
-        statusText.text = $"Ronda {currentTurn} - Observa el patrón...";
-        yield return new WaitForSeconds(1f);
+        BuildProgressDots(pattern.Count);
+        UpdateProgressDots(0);
+        SetStatus("Observa");
 
-        foreach (Button btn in pattern)
+        yield return new WaitForSeconds(0.65f);
+
+        foreach (Button button in pattern)
         {
-            yield return StartCoroutine(FlashButton(btn));
+            yield return StartCoroutine(FlashButton(button, 1f, 1.2f));
             yield return new WaitForSeconds(timeBetweenFlashes);
         }
 
-        isFlashing = false; // ← nuevo
+        isFlashing = false;
         isPlayerTurn = true;
         gameActive = true;
         playerInput.Clear();
-        statusText.text = $"Tu turno: {pattern.Count} pasos";
+
+        SetButtonBrightness(1f);
+        SetButtonsInteractable(true);
+        StartCoroutine(PulseReadyState());
+        SetStatus("Tu turno");
     }
 
-
-    IEnumerator FlashButton(Button btn)
+    private IEnumerator FlashButton(Button button, float durationMultiplier = 1f, float scaleMultiplier = 1.16f)
     {
-        Image img = btn.image;
-        Color originalColor = img.color;
-        Vector3 originalScale = btn.transform.localScale;
+        if (button == null || button.image == null)
+        {
+            yield break;
+        }
 
-        // Hacerlo más brillante (opcional: subir alfa o color claro)
-        img.color = new Color(1f, 1f, 1f, 1f); // blanco puro
+        Image image = button.image;
+        Vector3 originalScale = baseButtonScales[button];
 
-        // Escalar ligeramente para destacar
-        btn.transform.localScale = originalScale * 1.2f;
+        image.color = Color.white;
+        button.transform.localScale = originalScale * scaleMultiplier;
 
-        yield return new WaitForSeconds(flashTime);
+        yield return new WaitForSeconds(flashTime * durationMultiplier);
 
-        // Restaurar
-        img.color = originalColor;
-        btn.transform.localScale = originalScale;
+        image.color = MultiplyColor(baseButtonColors[button], currentBrightness);
+        button.transform.localScale = originalScale;
     }
 
-
-    void OnButtonClick(Button clickedButton)
+    private IEnumerator PulseReadyState()
     {
-        if (!isPlayerTurn || !gameActive) return;
+        foreach (Button button in availableButtons)
+        {
+            if (button == null)
+            {
+                continue;
+            }
+
+            Vector3 originalScale = baseButtonScales[button];
+            button.transform.localScale = originalScale * readyPulseScale;
+        }
+
+        yield return new WaitForSeconds(readyPulseDuration);
+
+        foreach (Button button in availableButtons)
+        {
+            if (button == null)
+            {
+                continue;
+            }
+
+            button.transform.localScale = baseButtonScales[button];
+        }
+    }
+
+    private void OnButtonClick(Button clickedButton)
+    {
+        if (!isPlayerTurn || !gameActive || isFlashing)
+        {
+            return;
+        }
+
+        StartCoroutine(FlashButton(clickedButton, 0.58f, 1.12f));
 
         playerInput.Add(clickedButton);
-        int i = playerInput.Count - 1;
+        int index = playerInput.Count - 1;
 
-        if (i >= pattern.Count)
+        if (index >= pattern.Count)
         {
-            Debug.LogWarning("Click inesperado fuera del patrón.");
             return;
         }
 
-        if (clickedButton != pattern[i])
+        if (clickedButton != pattern[index])
         {
-            statusText.text = "¡Te equivocaste!";
+            SetStatus("Error");
             isPlayerTurn = false;
             gameActive = false;
-            StartCoroutine(HandleLoss());
+            SetButtonsInteractable(false);
+
+            StopActiveRoutine();
+            activeRoutine = StartCoroutine(HandleLoss());
             return;
         }
+
+        UpdateProgressDots(playerInput.Count);
 
         if (playerInput.Count == pattern.Count)
         {
-            statusText.text = "¡Correcto!";
+            SetStatus("Bien");
             isPlayerTurn = false;
             gameActive = false;
-            StartCoroutine(NextTurn());
+            SetButtonsInteractable(false);
+
+            StopActiveRoutine();
+            activeRoutine = StartCoroutine(AdvanceTurnAfterDelay());
         }
     }
 
-    IEnumerator HandleLoss()
+    private IEnumerator AdvanceTurnAfterDelay()
     {
-        yield return new WaitForSeconds(1f);
+        yield return StartCoroutine(FlashAllButtons(successTint, 1));
+        yield return new WaitForSeconds(0.2f);
+        yield return StartCoroutine(NextTurn());
+    }
+
+    private IEnumerator HandleLoss()
+    {
+        yield return StartCoroutine(FlashAllButtons(failTint, 2));
+        yield return new WaitForSeconds(0.2f);
         OnGameFinished?.Invoke(false);
     }
 
-    void Update()
+    private IEnumerator FlashAllButtons(Color tintColor, int loops)
     {
-    #if UNITY_EDITOR
-            if (Input.GetKeyDown(KeyCode.Return) && isPlayerTurn && !isFlashing)
+        for (int loop = 0; loop < loops; loop++)
+        {
+            foreach (Button button in availableButtons)
             {
-                Debug.Log("⏩ Simulación automática de victoria (Enter presionado)");
-                isPlayerTurn = false;
-                gameActive = false;
-                StartCoroutine(NextTurn());
+                if (button == null || button.image == null)
+                {
+                    continue;
+                }
+
+                Color blended = Color.Lerp(baseButtonColors[button], tintColor, 0.75f);
+                button.image.color = blended;
             }
-    #endif
+
+            yield return new WaitForSeconds(0.12f);
+
+            foreach (Button button in availableButtons)
+            {
+                if (button == null || button.image == null)
+                {
+                    continue;
+                }
+
+                button.image.color = MultiplyColor(baseButtonColors[button], currentBrightness);
+            }
+
+            yield return new WaitForSeconds(0.08f);
+        }
+    }
+
+    private void SetButtonsInteractable(bool interactable)
+    {
+        foreach (Button button in availableButtons)
+        {
+            if (button != null)
+            {
+                button.interactable = interactable;
+            }
+        }
+    }
+
+    private void SetButtonBrightness(float brightness)
+    {
+        currentBrightness = Mathf.Clamp(brightness, 0.15f, 1f);
+
+        foreach (Button button in availableButtons)
+        {
+            if (button == null || button.image == null)
+            {
+                continue;
+            }
+
+            button.image.color = MultiplyColor(baseButtonColors[button], currentBrightness);
+        }
+    }
+
+    private void ResetButtonVisuals()
+    {
+        currentBrightness = 1f;
+
+        foreach (Button button in availableButtons)
+        {
+            if (button == null || button.image == null)
+            {
+                continue;
+            }
+
+            button.image.color = baseButtonColors[button];
+            button.transform.localScale = baseButtonScales[button];
+        }
+    }
+
+    private Color MultiplyColor(Color original, float multiplier)
+    {
+        return new Color(original.r * multiplier, original.g * multiplier, original.b * multiplier, original.a);
+    }
+
+    private void BuildProgressDots(int total)
+    {
+        if (progressContainer == null)
+        {
+            return;
         }
 
+        while (progressDots.Count < total)
+        {
+            GameObject dotObject = new GameObject("Dot", typeof(RectTransform), typeof(Image));
+            RectTransform rect = dotObject.GetComponent<RectTransform>();
+            rect.SetParent(progressContainer, false);
+            rect.sizeDelta = progressDotSize;
 
+            Image dot = dotObject.GetComponent<Image>();
+            dot.color = dotPendingColor;
+            progressDots.Add(dot);
+        }
+
+        for (int i = 0; i < progressDots.Count; i++)
+        {
+            bool active = i < total;
+            progressDots[i].gameObject.SetActive(active);
+        }
+
+        UpdateProgressDots(0);
+    }
+
+    private void UpdateProgressDots(int completed)
+    {
+        for (int i = 0; i < progressDots.Count; i++)
+        {
+            if (!progressDots[i].gameObject.activeSelf)
+            {
+                continue;
+            }
+
+            progressDots[i].color = i < completed ? dotDoneColor : dotPendingColor;
+        }
+    }
+
+    private void SetStatus(string message)
+    {
+        if (feedbackMode != FeedbackMode.VisualWithText || statusText == null)
+        {
+            return;
+        }
+
+        statusText.text = message;
+    }
+
+    private void StopActiveRoutine()
+    {
+        if (activeRoutine != null)
+        {
+            StopCoroutine(activeRoutine);
+            activeRoutine = null;
+        }
+    }
+
+    private void Update()
+    {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        if (Input.GetKeyDown(KeyCode.Return) && isPlayerTurn && !isFlashing)
+        {
+            isPlayerTurn = false;
+            gameActive = false;
+            SetButtonsInteractable(false);
+
+            StopActiveRoutine();
+            activeRoutine = StartCoroutine(AdvanceTurnAfterDelay());
+        }
+#endif
+    }
 }

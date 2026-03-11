@@ -1,11 +1,17 @@
 ﻿using System.Collections;
-using System.Collections.Generic;
-using UnityEngine;
 using Cinemachine;
+using UnityEngine;
 
 public class GameManager : MonoBehaviour
 {
-    [Header("Cámaras virtuales")]
+    public enum MiniType
+    {
+        Dalgona,
+        Simon,
+        Order
+    }
+
+    [Header("Camaras virtuales")]
     public CinemachineVirtualCamera camMain;
     public CinemachineVirtualCamera camLeft;
     public CinemachineVirtualCamera camCenter;
@@ -19,37 +25,63 @@ public class GameManager : MonoBehaviour
     [Header("UI")]
     public GameObject startButton;
 
-    private int currentMiniIndex = 0;
-    private int currentRound = 1;
-    private const int maxRounds = 3;
+    [Header("Timing")]
+    public float cameraSettleDelay = 0.8f;
+    public float returnToMainDelay = 0.5f;
+    public float betweenMinigamesDelay = 0.4f;
 
-    private enum MiniType { Dalgona, Simon, Order }
-    private bool minigameFinished = false;
+    [Header("Rondas")]
+    public int maxRounds = 3;
+
+    private int currentMiniIndex;
+    private int currentRound = 1;
+    private bool minigameFinished;
+
+    private bool isSequenceRunning;
+    private Coroutine sequenceRoutine;
+
+    public bool DebugIsSequenceRunning => isSequenceRunning;
+    public int DebugCurrentRound => currentRound;
+    public string DebugCurrentMiniName => ((MiniType)Mathf.Clamp(currentMiniIndex, 0, 2)).ToString();
 
     private void Start()
     {
-        // Asegúrate que todos los minijuegos estén desactivados al inicio
-        minigameSimon.SetActive(false);
-        minigameOrder.SetActive(false);
-        minigameDalgona.SetActive(false);
+        DeactivateAllMinigames();
+        SetAllPrioritiesLow();
+        camMain.Priority = 10;
     }
 
     public void OnStartButtonPressed()
     {
-        startButton.SetActive(false);
-        currentMiniIndex = 0;
-        currentRound = 1;
-        StartCoroutine(PlaySequence());
+        StartFullRun();
     }
 
-    IEnumerator PlaySequence()
+    public void StartFullRun()
     {
+        StopSequenceFlow();
+        DeactivateAllMinigames();
+        SetAllPrioritiesLow();
+        camMain.Priority = 10;
+
+        currentMiniIndex = 0;
+        currentRound = 1;
+        minigameFinished = false;
+
+        if (startButton != null)
+        {
+            startButton.SetActive(false);
+        }
+
+        sequenceRoutine = StartCoroutine(PlaySequence());
+    }
+
+    private IEnumerator PlaySequence()
+    {
+        isSequenceRunning = true;
         currentRound = 1;
 
         while (currentRound <= maxRounds)
         {
-            Debug.Log($"▶️ Iniciando ronda {currentRound}");
-
             MiniType[] sequence = { MiniType.Dalgona, MiniType.Simon, MiniType.Order };
 
             foreach (MiniType mini in sequence)
@@ -61,99 +93,88 @@ public class GameManager : MonoBehaviour
             currentRound++;
         }
 
-        Debug.Log("🎉 ¡Juego completado con éxito! 3 rondas superadas.");
+        isSequenceRunning = false;
+        sequenceRoutine = null;
         ShowVictoryScreen();
+
+        if (startButton != null)
+        {
+            startButton.SetActive(true);
+        }
     }
 
-    IEnumerator PlayMinigame(MiniType type)
+    private IEnumerator PlayMinigame(MiniType type)
     {
         SetAllPrioritiesLow();
-        yield return new WaitForSeconds(0.5f);
-
-        Debug.Log("🔍 Iniciando minijuego: " + type);
+        yield return new WaitForSeconds(0.2f);
 
         switch (type)
         {
             case MiniType.Simon:
                 camLeft.Priority = 10;
-                yield return new WaitForSeconds(2f);
+                yield return new WaitForSeconds(cameraSettleDelay);
 
-                if (minigameSimon != null)
+                if (minigameSimon == null)
                 {
-                    minigameSimon.SetActive(true);
-                    SimonManager2 simon = minigameSimon.GetComponentInChildren<SimonManager2>();
-
-                    if (simon != null)
-                    {
-                        simon.SetRound(currentRound);
-                        simon.OnGameFinished = OnMinigameFinished;
-                    }
-                    else
-                    {
-                        Debug.LogError("❌ No se encontró el script SimonManager2 en hijos de minigameSimon");
-                        yield break;
-                    }
-                }
-                else
-                {
-                    Debug.LogError("❌ minigameSimon no está asignado");
+                    Debug.LogError("minigameSimon no esta asignado");
                     yield break;
                 }
+
+                minigameSimon.SetActive(true);
+                SimonManager2 simon = minigameSimon.GetComponentInChildren<SimonManager2>(true);
+                if (simon == null)
+                {
+                    Debug.LogError("No se encontro SimonManager2 en minigameSimon");
+                    yield break;
+                }
+
+                simon.SetRound(currentRound);
+                simon.OnGameFinished = OnMinigameFinished;
                 break;
 
             case MiniType.Order:
                 camCenter.Priority = 10;
-                yield return new WaitForSeconds(2f);
+                yield return new WaitForSeconds(cameraSettleDelay);
 
-                if (minigameOrder != null)
+                if (minigameOrder == null)
                 {
-                    GameNumberR orderGame = minigameOrder.GetComponentInChildren<GameNumberR>();
-
-                    if (orderGame != null)
-                    {
-                        orderGame.ResetGame();
-                        orderGame.SetRound(currentRound);
-                        minigameOrder.SetActive(true);
-                        orderGame.OnGameFinished = OnMinigameFinished;
-                    }
-                    else
-                    {
-                        Debug.LogError("❌ No se encontró el script GameNumberR en hijos de minigameOrder");
-                        yield break;
-                    }
-                }
-                else
-                {
-                    Debug.LogError("❌ minigameOrder no está asignado");
+                    Debug.LogError("minigameOrder no esta asignado");
                     yield break;
                 }
+
+                minigameOrder.SetActive(true);
+                GameNumberR orderGame = minigameOrder.GetComponentInChildren<GameNumberR>(true);
+                if (orderGame == null)
+                {
+                    Debug.LogError("No se encontro GameNumberR en minigameOrder");
+                    yield break;
+                }
+
+                orderGame.SetRound(currentRound);
+                orderGame.ResetGame();
+                orderGame.OnGameFinished = OnMinigameFinished;
                 break;
 
             case MiniType.Dalgona:
                 camRight.Priority = 10;
-                yield return new WaitForSeconds(2f);
+                yield return new WaitForSeconds(cameraSettleDelay);
 
-                if (minigameDalgona != null)
+                if (minigameDalgona == null)
                 {
-                    minigameDalgona.SetActive(true);
-                    DalgonaGameManager dalgona = minigameDalgona.GetComponentInChildren<DalgonaGameManager>();
-
-                    if (dalgona != null)
-                    {
-                        dalgona.SetRound(currentRound);
-                        dalgona.OnGameFinished = OnMinigameFinished;
-                    }
-                    else
-                    {
-                        Debug.LogError("❌ No se encontró el script DalgonaGameManager en hijos de minigameDalgona");
-                        yield break;
-                    }
-                }
-                else
-                {
-                    Debug.LogError("❌ minigameDalgona no está asignado");
+                    Debug.LogError("minigameDalgona no esta asignado");
                     yield break;
                 }
+
+                minigameDalgona.SetActive(true);
+                DalgonaGameManager dalgona = minigameDalgona.GetComponentInChildren<DalgonaGameManager>(true);
+                if (dalgona == null)
+                {
+                    Debug.LogError("No se encontro DalgonaGameManager en minigameDalgona");
+                    yield break;
+                }
+
+                dalgona.SetRound(currentRound);
+                dalgona.OnGameFinished = OnMinigameFinished;
                 break;
         }
 
@@ -162,62 +183,165 @@ public class GameManager : MonoBehaviour
 
         SetAllPrioritiesLow();
         camMain.Priority = 10;
-        yield return new WaitForSeconds(1f);
+        yield return new WaitForSeconds(returnToMainDelay);
 
-        switch (type)
-        {
-            case MiniType.Simon: minigameSimon.SetActive(false); break;
-            case MiniType.Order: minigameOrder.SetActive(false); break;
-            case MiniType.Dalgona: minigameDalgona.SetActive(false); break;
-        }
-
-        yield return new WaitForSeconds(1f);
+        DeactivateMinigame(type);
+        yield return new WaitForSeconds(betweenMinigamesDelay);
     }
-
 
     public void OnMinigameFinished(bool success)
     {
         if (!success)
         {
-            Debug.Log("❌ Perdiste. Reiniciando juego.");
+            HandleFailure();
+            return;
+        }
 
-            StopAllCoroutines();
-            SetAllPrioritiesLow();
-            camMain.Priority = 10;
+        minigameFinished = true;
+    }
 
-            switch ((MiniType)currentMiniIndex)
-            {
-                case MiniType.Simon:
-                    minigameSimon.SetActive(false);
-                    break;
-                case MiniType.Order:
-                    minigameOrder.SetActive(false);
-                    break;
-                case MiniType.Dalgona:
-                    minigameDalgona.SetActive(false);
-                    break;
-            }
+    public void DebugForceCurrentWin()
+    {
+        if (!IsAnyMinigameActive())
+        {
+            return;
+        }
 
+        OnMinigameFinished(true);
+    }
+
+    public void DebugForceCurrentLoss()
+    {
+        if (!IsAnyMinigameActive())
+        {
+            return;
+        }
+
+        OnMinigameFinished(false);
+    }
+
+    public void DebugPlaySingleMini(MiniType miniType, int round)
+    {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        StopSequenceFlow();
+
+        currentRound = Mathf.Clamp(round, 1, maxRounds);
+        currentMiniIndex = (int)miniType;
+        minigameFinished = false;
+
+        SetAllPrioritiesLow();
+        camMain.Priority = 10;
+        DeactivateAllMinigames();
+
+        if (startButton != null)
+        {
+            startButton.SetActive(false);
+        }
+
+        sequenceRoutine = StartCoroutine(PlaySingleMiniRoutine(miniType));
+#endif
+    }
+
+    private IEnumerator PlaySingleMiniRoutine(MiniType miniType)
+    {
+        isSequenceRunning = true;
+        yield return StartCoroutine(PlayMinigame(miniType));
+        isSequenceRunning = false;
+        sequenceRoutine = null;
+
+        if (startButton != null)
+        {
             startButton.SetActive(true);
         }
-        else
+    }
+
+    private void HandleFailure()
+    {
+        StopSequenceFlow();
+        SetAllPrioritiesLow();
+        camMain.Priority = 10;
+        DeactivateAllMinigames();
+
+        if (startButton != null)
         {
-            minigameFinished = true;
+            startButton.SetActive(true);
+        }
+    }
+
+    private void StopSequenceFlow()
+    {
+        if (sequenceRoutine != null)
+        {
+            StopCoroutine(sequenceRoutine);
+            sequenceRoutine = null;
+        }
+
+        isSequenceRunning = false;
+        minigameFinished = false;
+    }
+
+    private bool IsAnyMinigameActive()
+    {
+        return (minigameSimon != null && minigameSimon.activeSelf)
+            || (minigameOrder != null && minigameOrder.activeSelf)
+            || (minigameDalgona != null && minigameDalgona.activeSelf);
+    }
+
+    private void DeactivateAllMinigames()
+    {
+        if (minigameSimon != null)
+        {
+            minigameSimon.SetActive(false);
+        }
+
+        if (minigameOrder != null)
+        {
+            minigameOrder.SetActive(false);
+        }
+
+        if (minigameDalgona != null)
+        {
+            minigameDalgona.SetActive(false);
+        }
+    }
+
+    private void DeactivateMinigame(MiniType type)
+    {
+        switch (type)
+        {
+            case MiniType.Simon:
+                if (minigameSimon != null)
+                {
+                    minigameSimon.SetActive(false);
+                }
+                break;
+
+            case MiniType.Order:
+                if (minigameOrder != null)
+                {
+                    minigameOrder.SetActive(false);
+                }
+                break;
+
+            case MiniType.Dalgona:
+                if (minigameDalgona != null)
+                {
+                    minigameDalgona.SetActive(false);
+                }
+                break;
         }
     }
 
     private void SetAllPrioritiesLow()
     {
-        camMain.Priority = 0;
-        camLeft.Priority = 0;
-        camCenter.Priority = 0;
-        camRight.Priority = 0;
+        if (camMain != null) camMain.Priority = 0;
+        if (camLeft != null) camLeft.Priority = 0;
+        if (camCenter != null) camCenter.Priority = 0;
+        if (camRight != null) camRight.Priority = 0;
     }
 
     private void ShowVictoryScreen()
     {
-        Debug.Log("✨ ¡Ganaste el juego completo!");
-        // Aquí puedes activar un Canvas con texto, botón de reiniciar, etc.
+        Debug.Log("Juego completado");
     }
 }
-
