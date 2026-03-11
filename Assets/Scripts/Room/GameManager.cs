@@ -165,7 +165,6 @@ public class GameManager : MonoBehaviour
                     yield break;
                 }
 
-                minigameDalgona.SetActive(true);
                 DalgonaGameManager dalgona = minigameDalgona.GetComponentInChildren<DalgonaGameManager>(true);
                 if (dalgona == null)
                 {
@@ -175,6 +174,7 @@ public class GameManager : MonoBehaviour
 
                 dalgona.SetRound(currentRound);
                 dalgona.OnGameFinished = OnMinigameFinished;
+                minigameDalgona.SetActive(true);
                 break;
         }
 

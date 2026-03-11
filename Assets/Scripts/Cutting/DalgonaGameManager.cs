@@ -6,258 +6,1278 @@ using UnityEngine.UI;
 
 public class DalgonaGameManager : MonoBehaviour
 {
-    [Header("Configuracion")]
+    private enum MatchState
+    {
+        Disabled,
+        Intro,
+        Playing,
+        Won,
+        Lost
+    }
+
+    [Header("Core")]
     public RawImage galletaImage;
     public Color colorFigura = new Color32(33, 60, 132, 255);
-    public float tolerancia = 0.08f;
+    [Range(0.01f, 0.45f)] public float tolerancia = 0.08f;
+    [Tooltip("Texturas por ronda (1=facil, 2=media, 3=dificil).")]
+    public List<Texture2D> figurasPorRonda = new();
 
-    [Tooltip("Texturas por dificultad (ronda 1 = indice 0, etc.)")]
-    public List<Texture2D> figurasPorRonda;
-
-    [Header("UI")]
+    [Header("Status UI (optional)")]
     public bool useStatusText = false;
     public TextMeshProUGUI statusText;
     public bool autoFindStatusText = true;
 
-    [Header("Balance")]
-    public int baseAttempts = 3;
-    public int minAttempts = 1;
-    public float toleranceReductionPerRound = 0.015f;
-    public float minimumTolerance = 0.05f;
-    public float retryCooldown = 0.35f;
+    [Header("Round Balance")]
+    public float baseTimeLimit = 36f;
+    public float timeLimitReductionPerRound = 1.2f;
+    public float minimumTimeLimit = 24f;
+    [Range(0.3f, 0.95f)] public float baseRequiredCoverage = 0.32f;
+    public float coverageIncreasePerRound = 0.02f;
+    [Range(0.3f, 0.98f)] public float maximumRequiredCoverage = 0.42f;
+    public float baseIntegrity = 100f;
+    public float integrityReductionPerRound = 14f;
+    public float minimumIntegrity = 45f;
+    public float introLockDuration = 0.6f;
+    public float finishDelay = 0.35f;
 
-    [Header("Feedback visual")]
+    [Header("Needle and Damage")]
+    public float offPathDamagePerSecond = 6f;
+    public float pressureDamagePerSecond = 8f;
+    [Range(0f, 1f)] public float pressureThresholdToDamage = 0.9f;
+    public float pressureBuildPerSecond = 0.3f;
+    public float pressureReleasePerSecond = 0.95f;
+    public float pressureBuildOnPathMultiplier = 0.33f;
+    public float pressureBuildOffPathMultiplier = 0.7f;
+    public float stationaryPressureBonus = 0.08f;
+    public float stationarySpeedThreshold = 3f;
+    public float minCursorStepPixels = 0.9f;
+
+    [Header("Path Detection")]
+    public float minAlphaForPath = 0.1f;
+    public int detectionRadius = 4;
+    public int assistRadiusBonus = 5;
+    public int validBrushRadius = 5;
+    public int invalidBrushRadius = 1;
+    public int cutAssistFillRadius = 6;
+    public int cutAssistMaxPixelsPerHit = 220;
+    [Range(0f, 1f)] public float cutAssistFillStrength = 0.35f;
+    public int minComponentPixels = 20;
+    public bool ignoreEdgeConnectedPath = true;
+    public bool fallbackToDarkLineDetection = true;
+    [Range(0f, 1f)] public float darkLineMaxLuminance = 0.56f;
+    [Range(0f, 1f)] public float darkLineMinSaturation = 0.12f;
+    public int minimumTargetPixelsToAcceptColorMask = 120;
+
+    [Header("Manual Cut Path")]
+    public bool useManualCutPath = false;
+    public Transform manualPathPointsRoot;
+    public bool manualPathClosed = true;
+    public float manualPathWidthUi = 42f;
+    public float manualPathSampleSpacingUi = 8f;
+
+    [Header("Visual Feedback")]
     public Color neutralTint = Color.white;
-    public Color warningTint = new Color(1f, 0.84f, 0.84f, 1f);
-    public Color successTint = new Color(0.74f, 1f, 0.76f, 1f);
-    public Color invalidClickTint = new Color(1f, 0.95f, 0.75f, 1f);
-    public Color failTint = new Color(1f, 0.55f, 0.55f, 1f);
-    public float flashDuration = 0.16f;
-    public float riskTintStrength = 0.7f;
+    public Color warningTint = new Color(1f, 0.9f, 0.86f, 1f);
+    public Color highPressureTint = new Color(1f, 0.74f, 0.62f, 1f);
+    public Color successTint = new Color(0.75f, 1f, 0.8f, 1f);
+    public Color failTint = new Color(1f, 0.56f, 0.56f, 1f);
+    public Color tracedPathColor = new Color(0.97f, 0.98f, 1f, 0.4f);
+    public Color crackPathColor = new Color(0.86f, 0.5f, 0.36f, 0.5f);
+    [Range(0f, 1f)] public float tracedPaintStrength = 0.42f;
+    [Range(0f, 1f)] public float crackPaintStrength = 0.2f;
+    public float flashDuration = 0.14f;
+    public float shakeDuration = 0.12f;
+    public float shakeStrength = 4.5f;
+    public float damageFlashCooldown = 0.11f;
 
-    [Header("Intentos visuales")]
-    public Transform attemptsContainer;
-    public Vector2 attemptsAnchoredPosition = new Vector2(0f, -165f);
-    public Vector2 attemptsDotSize = new Vector2(18f, 18f);
-    public float attemptsSpacing = 11f;
-    public Color attemptAvailableColor = new Color(1f, 1f, 1f, 0.95f);
-    public Color attemptUsedColor = new Color(1f, 1f, 1f, 0.2f);
+    [Header("Scissor Cursor")]
+    public bool showScissorCursor = true;
+    public Vector2 scissorCursorSize = new Vector2(34f, 34f);
+    public Vector2 scissorBladeSize = new Vector2(22f, 3f);
+    public Color scissorBladeColor = new Color(0.92f, 0.95f, 1f, 0.95f);
+    public Color scissorHandleColor = new Color(1f, 0.74f, 0.45f, 0.95f);
+    public float scissorOpenAngle = 18f;
+    public float scissorClosedAngle = 6f;
+    public float scissorPulseSpeed = 16f;
+    public float scissorSmooth = 22f;
+    public bool rotateScissorWithMovement = false;
+    public float scissorIdleAngle = -16f;
+    public float scissorMovementThreshold = 8f;
+
+    [Header("Runtime HUD")]
+    public bool createRuntimeHud = false;
+    public RectTransform hudRoot;
+    public Vector2 hudAnchoredPosition = new Vector2(0f, -185f);
+    public Vector2 hudSize = new Vector2(340f, 78f);
+    public Color hudBackgroundColor = new Color(0f, 0f, 0f, 0.35f);
+    public Color progressBarColor = new Color(0.35f, 0.88f, 1f, 0.95f);
+    public Color integrityBarColor = new Color(0.91f, 0.84f, 0.43f, 0.95f);
+    public Color pressureBarColor = new Color(1f, 0.45f, 0.34f, 0.95f);
+    public Vector2 barSize = new Vector2(292f, 14f);
+    public float barSpacing = 21f;
+
+    [Header("Performance")]
+    public float textureApplyInterval = 0.02f;
 
     public System.Action<bool> OnGameFinished;
 
-    private bool juegoActivo;
-    private bool waitingRetryFeedback;
+    private MatchState state = MatchState.Disabled;
     private int ronda = 1;
-    private int attemptsLeft;
-    private int maxAttemptsThisRound;
-    private float baseTolerance;
-    private Texture2D texturaFigura;
+
+    private float timeLimit;
+    private float timeLeft;
+    private float requiredCoverage;
+    private float maxIntegrity;
+    private float integrity;
+    private float pressure;
+
+    private bool pointerHeld;
+    private bool hasLastPixel;
+    private Vector2Int lastPixel;
+
+    private float nextTextureApplyTime;
+    private bool textureDirty;
+    private float nextDamageFlashTime;
+    private int crackStage;
+    private float introEndTime;
+
+    private RectTransform cookieRect;
+    private Vector2 cookieBasePosition;
+
+    private Texture2D sourceTexture;
+    private Texture2D runtimeTexture;
+    private Texture2D transientReadableCopy;
+    private Color[] sourcePixels;
+    private Color[] runtimePixels;
+    private bool[] targetMask;
+    private bool[] visitedMask;
+    private int textureWidth;
+    private int textureHeight;
+    private int targetPixelCount;
+    private int visitedPixelCount;
+
     private Coroutine tintRoutine;
-    private readonly List<Image> attemptDots = new();
+    private Coroutine shakeRoutine;
+    private bool tintOverrideActive;
+
+    private Image progressFill;
+    private Image integrityFill;
+    private Image pressureFill;
+
+    private RectTransform scissorCursorRoot;
+    private RectTransform scissorBladeTop;
+    private RectTransform scissorBladeBottom;
+    private RectTransform scissorHandle;
+    private Vector2 scissorLastScreenPosition;
+    private bool hasScissorLastScreenPosition;
+    private float scissorCurrentAngle = 24f;
+    private float scissorTargetAngle = 24f;
 
     private void Awake()
     {
-        baseTolerance = tolerancia;
-        EnsureAttemptsContainer();
-
         if (statusText == null && autoFindStatusText)
         {
             statusText = GetComponentInChildren<TextMeshProUGUI>(true);
         }
+
+        if (galletaImage != null)
+        {
+            cookieRect = galletaImage.rectTransform;
+            cookieBasePosition = cookieRect.anchoredPosition;
+        }
+    }
+
+    private void OnEnable()
+    {
+        StartRound();
+    }
+
+    private void OnDisable()
+    {
+        StopFeedbackCoroutines();
+        state = MatchState.Disabled;
+        pointerHeld = false;
+        hasLastPixel = false;
+        tintOverrideActive = false;
+
+        if (cookieRect != null)
+        {
+            cookieRect.anchoredPosition = cookieBasePosition;
+        }
+
+        if (galletaImage != null)
+        {
+            galletaImage.color = neutralTint;
+            if (sourceTexture != null)
+            {
+                galletaImage.texture = sourceTexture;
+            }
+        }
+
+        if (statusText != null)
+        {
+            statusText.gameObject.SetActive(useStatusText);
+        }
+
+        if (hudRoot != null)
+        {
+            hudRoot.gameObject.SetActive(false);
+        }
+
+        SetScissorCursorVisible(false);
+        hasScissorLastScreenPosition = false;
+
+        CleanupRuntimeTexture();
+    }
+
+    private void OnDestroy()
+    {
+        CleanupRuntimeTexture();
     }
 
     public void SetRound(int r)
     {
         ronda = Mathf.Max(1, r);
 
-        int textureIndex = Mathf.Clamp(ronda - 1, 0, Mathf.Max(0, figurasPorRonda.Count - 1));
-        if (figurasPorRonda.Count > 0)
+        if (isActiveAndEnabled)
         {
-            texturaFigura = figurasPorRonda[textureIndex];
-            if (galletaImage != null)
-            {
-                galletaImage.texture = texturaFigura;
-            }
-        }
-        else
-        {
-            Debug.LogWarning("No hay texturas asignadas para Dalgona.");
-        }
-
-        tolerancia = Mathf.Max(minimumTolerance, baseTolerance - (ronda - 1) * toleranceReductionPerRound);
-        maxAttemptsThisRound = Mathf.Max(minAttempts, baseAttempts - (ronda - 1));
-        attemptsLeft = maxAttemptsThisRound;
-        BuildAttemptDots(maxAttemptsThisRound);
-
-        if (juegoActivo)
-        {
-            UpdateAttemptVisual();
-            UpdateStatus("Recorta con cuidado");
-        }
-    }
-
-    private void OnEnable()
-    {
-        if (texturaFigura == null)
-        {
-            SetRound(ronda);
-        }
-
-        if (attemptsLeft <= 0)
-        {
-            maxAttemptsThisRound = Mathf.Max(minAttempts, baseAttempts - (ronda - 1));
-            attemptsLeft = maxAttemptsThisRound;
-        }
-
-        BuildAttemptDots(maxAttemptsThisRound);
-
-        juegoActivo = true;
-        waitingRetryFeedback = false;
-
-        if (statusText != null)
-        {
-            statusText.gameObject.SetActive(useStatusText);
-            if (useStatusText)
-            {
-                statusText.fontSize = Mathf.Max(32f, statusText.fontSize);
-                statusText.alignment = TextAlignmentOptions.Center;
-            }
-        }
-
-        UpdateAttemptVisual();
-        UpdateStatus("Recorta con cuidado");
-    }
-
-    private void OnDisable()
-    {
-        if (tintRoutine != null)
-        {
-            StopCoroutine(tintRoutine);
-            tintRoutine = null;
+            StartRound();
         }
     }
 
     private void Update()
     {
-        if (!juegoActivo || waitingRetryFeedback)
+        if (state == MatchState.Disabled || state == MatchState.Won || state == MatchState.Lost)
         {
             return;
-        }
-
-        if (Input.GetMouseButtonUp(0))
-        {
-            bool clickedInsideTexture;
-            bool success = VerificarRecorte(out clickedInsideTexture);
-
-            if (success)
-            {
-                juegoActivo = false;
-                UpdateStatus("Exito");
-                if (tintRoutine != null)
-                {
-                    StopCoroutine(tintRoutine);
-                }
-                tintRoutine = StartCoroutine(FinishWithTint(true));
-                return;
-            }
-
-            if (!clickedInsideTexture)
-            {
-                UpdateStatus("Clic dentro de la figura");
-                FlashTint(invalidClickTint);
-                return;
-            }
-
-            attemptsLeft--;
-            UpdateAttemptVisual();
-
-            if (attemptsLeft <= 0)
-            {
-                juegoActivo = false;
-                UpdateStatus("Fallaste");
-                if (tintRoutine != null)
-                {
-                    StopCoroutine(tintRoutine);
-                }
-                tintRoutine = StartCoroutine(FinishWithTint(false));
-                return;
-            }
-
-            StartCoroutine(RetryCooldownRoutine());
         }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         if (Input.GetKeyDown(KeyCode.Return))
         {
-            juegoActivo = false;
-            if (tintRoutine != null)
-            {
-                StopCoroutine(tintRoutine);
-            }
-            tintRoutine = StartCoroutine(FinishWithTint(true));
+            CompleteMatch(true, "Debug win");
+            return;
+        }
+
+        if (Input.GetKeyDown(KeyCode.Backspace))
+        {
+            CompleteMatch(false, "Debug fail");
+            return;
         }
 #endif
-    }
 
-    private IEnumerator RetryCooldownRoutine()
-    {
-        waitingRetryFeedback = true;
-        UpdateStatus("Intenta de nuevo");
-        FlashTint(warningTint);
+        ReadPointerState(out bool pointerDown, out bool pointerActive, out bool pointerUp, out Vector2 pointerPos);
+        UpdateScissorCursor(pointerPos, pointerActive);
 
-        yield return new WaitForSeconds(retryCooldown);
-
-        waitingRetryFeedback = false;
-        if (juegoActivo)
+        if (state == MatchState.Intro)
         {
-            UpdateStatus("Recorta con cuidado");
+            if (Time.time >= introEndTime)
+            {
+                state = MatchState.Playing;
+                UpdateStatus("Corta el contorno con la tijera.");
+            }
+
+            UpdateHud();
+            ApplyRuntimeTextureIfNeeded();
+            return;
         }
+
+        if (state != MatchState.Playing)
+        {
+            return;
+        }
+
+        float dt = Time.deltaTime;
+        timeLeft -= dt;
+        if (timeLeft <= 0f)
+        {
+            timeLeft = 0f;
+            CompleteMatch(false, "Tiempo agotado");
+            return;
+        }
+
+        if (pointerDown)
+        {
+            pointerHeld = true;
+            hasLastPixel = false;
+        }
+
+        if (pointerUp)
+        {
+            pointerHeld = false;
+            hasLastPixel = false;
+        }
+
+        bool touchedPath = false;
+        bool touchedOffPath = false;
+        float pointerSpeed = 0f;
+        bool pointerInsideCookie = false;
+
+        if (pointerActive)
+        {
+            touchedPath = TraceFromPointer(pointerPos, dt, out touchedOffPath, out pointerSpeed, out pointerInsideCookie);
+        }
+        else
+        {
+            pointerHeld = false;
+            hasLastPixel = false;
+        }
+
+        UpdatePressure(dt, pointerHeld && pointerInsideCookie, touchedPath, touchedOffPath, pointerSpeed);
+
+        if (touchedOffPath)
+        {
+            ApplyDamage(offPathDamagePerSecond * dt);
+        }
+
+        if (GetProgress() >= requiredCoverage)
+        {
+            CompleteMatch(true, "Exito");
+            return;
+        }
+
+        UpdateCrackStageFeedback();
+        UpdateHud();
+        RefreshCookieTint();
+        ApplyRuntimeTextureIfNeeded();
     }
 
-    private IEnumerator FinishWithTint(bool success)
+    private void StartRound()
     {
-        Color target = success ? successTint : failTint;
-        FlashTint(target);
+        StopFeedbackCoroutines();
+        pointerHeld = false;
+        hasLastPixel = false;
+        textureDirty = false;
+        tintOverrideActive = false;
+        nextDamageFlashTime = 0f;
+        crackStage = 0;
 
-        yield return new WaitForSeconds(flashDuration + 0.08f);
-        OnGameFinished?.Invoke(success);
+        if (galletaImage == null)
+        {
+            Debug.LogError("DalgonaGameManager: galletaImage no esta asignada.");
+            CompleteMatch(false, "Config invalida");
+            return;
+        }
+
+        cookieRect = galletaImage.rectTransform;
+        cookieBasePosition = cookieRect.anchoredPosition;
+
+        sourceTexture = ResolveTextureForCurrentRound();
+        if (sourceTexture == null)
+        {
+            Debug.LogError("DalgonaGameManager: no hay textura valida para esta ronda.");
+            CompleteMatch(false, "Sin textura");
+            return;
+        }
+
+        if (!BuildRuntimeTexture(sourceTexture))
+        {
+            Debug.LogError("DalgonaGameManager: no se pudo preparar textura para recorte.");
+            CompleteMatch(false, "Error de textura");
+            return;
+        }
+
+        BuildTargetMask();
+        if (targetPixelCount <= 0)
+        {
+            Debug.LogError("DalgonaGameManager: no se detecto trazado objetivo en la textura.");
+            CompleteMatch(false, "Mascara invalida");
+            return;
+        }
+
+        timeLimit = Mathf.Max(minimumTimeLimit, baseTimeLimit - (ronda - 1) * timeLimitReductionPerRound);
+        requiredCoverage = Mathf.Clamp(baseRequiredCoverage + (ronda - 1) * coverageIncreasePerRound, 0.3f, maximumRequiredCoverage);
+        maxIntegrity = Mathf.Max(minimumIntegrity, baseIntegrity - (ronda - 1) * integrityReductionPerRound);
+
+        timeLeft = timeLimit;
+        integrity = maxIntegrity;
+        pressure = 0f;
+
+        if (createRuntimeHud)
+        {
+            EnsureHudBuilt();
+            if (hudRoot != null)
+            {
+                hudRoot.gameObject.SetActive(true);
+            }
+
+            UpdateHud(true);
+        }
+        else if (hudRoot != null)
+        {
+            hudRoot.gameObject.SetActive(false);
+        }
+
+        EnsureScissorCursor();
+        SetScissorCursorVisible(showScissorCursor);
+        hasScissorLastScreenPosition = false;
+
+        if (statusText != null)
+        {
+            statusText.gameObject.SetActive(useStatusText);
+        }
+
+        UpdateStatus("Preparate para cortar...");
+        RefreshCookieTint();
+
+        state = MatchState.Intro;
+        introEndTime = Time.time + Mathf.Max(0.05f, introLockDuration);
     }
 
-    private bool VerificarRecorte(out bool clickedInsideTexture)
+    private Texture2D ResolveTextureForCurrentRound()
     {
-        clickedInsideTexture = false;
+        if (figurasPorRonda != null && figurasPorRonda.Count > 0)
+        {
+            int index = Mathf.Clamp(ronda - 1, 0, figurasPorRonda.Count - 1);
+            return figurasPorRonda[index];
+        }
 
-        if (galletaImage == null || texturaFigura == null)
+        return galletaImage != null ? galletaImage.texture as Texture2D : null;
+    }
+
+    private bool BuildRuntimeTexture(Texture2D texture)
+    {
+        CleanupRuntimeTexture();
+        transientReadableCopy = null;
+
+        Texture2D workingSource = texture;
+        Color[] source = null;
+
+        try
+        {
+            source = workingSource.GetPixels();
+        }
+        catch
+        {
+            workingSource = CopyReadableTexture(texture);
+            transientReadableCopy = workingSource;
+            if (workingSource != null)
+            {
+                source = workingSource.GetPixels();
+            }
+        }
+
+        if (source == null || source.Length == 0)
         {
             return false;
         }
 
-        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(galletaImage.rectTransform, Input.mousePosition, null, out Vector2 localPos))
+        textureWidth = workingSource.width;
+        textureHeight = workingSource.height;
+        sourcePixels = source;
+        runtimePixels = new Color[sourcePixels.Length];
+        System.Array.Copy(sourcePixels, runtimePixels, sourcePixels.Length);
+
+        runtimeTexture = new Texture2D(textureWidth, textureHeight, TextureFormat.RGBA32, false);
+        runtimeTexture.filterMode = texture.filterMode;
+        runtimeTexture.wrapMode = TextureWrapMode.Clamp;
+        runtimeTexture.SetPixels(runtimePixels);
+        runtimeTexture.Apply(false);
+
+        galletaImage.texture = runtimeTexture;
+        nextTextureApplyTime = Time.unscaledTime + textureApplyInterval;
+        textureDirty = false;
+        return true;
+    }
+
+    private Texture2D CopyReadableTexture(Texture2D source)
+    {
+        if (source == null)
+        {
+            return null;
+        }
+
+        RenderTexture tmp = RenderTexture.GetTemporary(source.width, source.height, 0, RenderTextureFormat.ARGB32);
+        RenderTexture previous = RenderTexture.active;
+        Graphics.Blit(source, tmp);
+        RenderTexture.active = tmp;
+
+        Texture2D copy = new Texture2D(source.width, source.height, TextureFormat.RGBA32, false);
+        copy.ReadPixels(new Rect(0, 0, source.width, source.height), 0, 0);
+        copy.Apply(false);
+
+        RenderTexture.active = previous;
+        RenderTexture.ReleaseTemporary(tmp);
+        return copy;
+    }
+
+    private void CleanupRuntimeTexture()
+    {
+        if (runtimeTexture != null)
+        {
+            Destroy(runtimeTexture);
+            runtimeTexture = null;
+        }
+
+        if (transientReadableCopy != null)
+        {
+            Destroy(transientReadableCopy);
+            transientReadableCopy = null;
+        }
+
+        sourcePixels = null;
+        runtimePixels = null;
+        targetMask = null;
+        visitedMask = null;
+        textureWidth = 0;
+        textureHeight = 0;
+        targetPixelCount = 0;
+        visitedPixelCount = 0;
+    }
+
+    private void BuildTargetMask()
+    {
+        targetMask = new bool[sourcePixels.Length];
+        visitedMask = new bool[sourcePixels.Length];
+
+        if (TryBuildManualTargetMask(out bool[] manualMask, out int manualCount))
+        {
+            targetMask = manualMask;
+            targetPixelCount = manualCount;
+            visitedPixelCount = 0;
+            return;
+        }
+
+        bool[] colorMask = BuildColorMask(out int colorMaskCount);
+        bool useFallback = fallbackToDarkLineDetection && colorMaskCount < minimumTargetPixelsToAcceptColorMask;
+        bool[] rawMask = useFallback ? BuildDarkLineMask() : colorMask;
+        bool[] filteredMask = BuildFilteredMask(rawMask, out int filteredCount);
+
+        if (filteredCount <= 0)
+        {
+            filteredMask = rawMask;
+            filteredCount = CountMaskTrue(filteredMask);
+        }
+
+        targetMask = filteredMask;
+        targetPixelCount = filteredCount;
+        visitedPixelCount = 0;
+    }
+
+    private bool TryBuildManualTargetMask(out bool[] mask, out int count)
+    {
+        mask = null;
+        count = 0;
+
+        if (!useManualCutPath || manualPathPointsRoot == null || galletaImage == null)
+        {
+            return false;
+        }
+
+        List<Vector2Int> points = new List<Vector2Int>(16);
+        foreach (Transform child in manualPathPointsRoot)
+        {
+            if (!child.gameObject.activeInHierarchy)
+            {
+                continue;
+            }
+
+            if (TryWorldToTexturePixel(child.position, out Vector2Int pixel))
+            {
+                points.Add(pixel);
+            }
+        }
+
+        if (points.Count < 2)
+        {
+            return false;
+        }
+
+        mask = new bool[sourcePixels.Length];
+        float pxPerUi = GetPixelsPerUiAverage();
+        int radius = Mathf.Max(1, Mathf.RoundToInt((manualPathWidthUi * pxPerUi) * 0.5f));
+        float sampleStepPx = Mathf.Max(1f, manualPathSampleSpacingUi * pxPerUi);
+
+        for (int i = 0; i < points.Count - 1; i++)
+        {
+            RasterizeManualSegment(mask, points[i], points[i + 1], radius, sampleStepPx);
+        }
+
+        if (manualPathClosed)
+        {
+            RasterizeManualSegment(mask, points[points.Count - 1], points[0], radius, sampleStepPx);
+        }
+
+        count = CountMaskTrue(mask);
+        return count > 0;
+    }
+
+    private void RasterizeManualSegment(bool[] mask, Vector2Int from, Vector2Int to, int radius, float stepPx)
+    {
+        float distance = Vector2.Distance(from, to);
+        int steps = Mathf.Max(1, Mathf.CeilToInt(distance / Mathf.Max(0.5f, stepPx)));
+
+        for (int i = 0; i <= steps; i++)
+        {
+            float t = steps == 0 ? 0f : i / (float)steps;
+            int x = Mathf.RoundToInt(Mathf.Lerp(from.x, to.x, t));
+            int y = Mathf.RoundToInt(Mathf.Lerp(from.y, to.y, t));
+            PaintMaskDisk(mask, x, y, radius);
+        }
+    }
+
+    private void PaintMaskDisk(bool[] mask, int centerX, int centerY, int radius)
+    {
+        int r = Mathf.Max(1, radius);
+        int sqr = r * r;
+
+        for (int oy = -r; oy <= r; oy++)
+        {
+            int y = centerY + oy;
+            if (y < 0 || y >= textureHeight)
+            {
+                continue;
+            }
+
+            for (int ox = -r; ox <= r; ox++)
+            {
+                if (ox * ox + oy * oy > sqr)
+                {
+                    continue;
+                }
+
+                int x = centerX + ox;
+                if (x < 0 || x >= textureWidth)
+                {
+                    continue;
+                }
+
+                int index = y * textureWidth + x;
+                mask[index] = true;
+            }
+        }
+    }
+
+    private bool[] BuildColorMask(out int count)
+    {
+        bool[] mask = new bool[sourcePixels.Length];
+        count = 0;
+
+        Color target = colorFigura;
+        float toleranceSqr = tolerancia * tolerancia;
+
+        for (int i = 0; i < sourcePixels.Length; i++)
+        {
+            Color px = sourcePixels[i];
+            if (px.a < minAlphaForPath)
+            {
+                continue;
+            }
+
+            float dr = px.r - target.r;
+            float dg = px.g - target.g;
+            float db = px.b - target.b;
+            float distSqr = dr * dr + dg * dg + db * db;
+
+            if (distSqr <= toleranceSqr)
+            {
+                mask[i] = true;
+                count++;
+            }
+        }
+
+        return mask;
+    }
+
+    private bool[] BuildDarkLineMask()
+    {
+        bool[] mask = new bool[sourcePixels.Length];
+
+        for (int i = 0; i < sourcePixels.Length; i++)
+        {
+            Color px = sourcePixels[i];
+            if (px.a < minAlphaForPath)
+            {
+                continue;
+            }
+
+            float maxC = Mathf.Max(px.r, Mathf.Max(px.g, px.b));
+            float minC = Mathf.Min(px.r, Mathf.Min(px.g, px.b));
+            float saturation = maxC - minC;
+            float luminance = (0.2126f * px.r) + (0.7152f * px.g) + (0.0722f * px.b);
+
+            if (luminance <= darkLineMaxLuminance && saturation >= darkLineMinSaturation)
+            {
+                mask[i] = true;
+            }
+        }
+
+        return mask;
+    }
+
+    private bool[] BuildFilteredMask(bool[] rawMask, out int count)
+    {
+        bool[] filtered = new bool[rawMask.Length];
+        bool[] visited = new bool[rawMask.Length];
+        Queue<int> queue = new Queue<int>(512);
+        List<int> component = new List<int>(512);
+        bool keptAny = false;
+
+        for (int i = 0; i < rawMask.Length; i++)
+        {
+            if (!rawMask[i] || visited[i])
+            {
+                continue;
+            }
+
+            queue.Clear();
+            component.Clear();
+            visited[i] = true;
+            queue.Enqueue(i);
+
+            bool touchesEdge = false;
+
+            while (queue.Count > 0)
+            {
+                int index = queue.Dequeue();
+                component.Add(index);
+
+                int x = index % textureWidth;
+                int y = index / textureWidth;
+
+                if (x == 0 || y == 0 || x == textureWidth - 1 || y == textureHeight - 1)
+                {
+                    touchesEdge = true;
+                }
+
+                for (int oy = -1; oy <= 1; oy++)
+                {
+                    for (int ox = -1; ox <= 1; ox++)
+                    {
+                        if (ox == 0 && oy == 0)
+                        {
+                            continue;
+                        }
+
+                        int nx = x + ox;
+                        int ny = y + oy;
+                        if (nx < 0 || ny < 0 || nx >= textureWidth || ny >= textureHeight)
+                        {
+                            continue;
+                        }
+
+                        int nIndex = ny * textureWidth + nx;
+                        if (visited[nIndex] || !rawMask[nIndex])
+                        {
+                            continue;
+                        }
+
+                        visited[nIndex] = true;
+                        queue.Enqueue(nIndex);
+                    }
+                }
+            }
+
+            bool keep = component.Count >= Mathf.Max(1, minComponentPixels);
+            if (keep && ignoreEdgeConnectedPath && touchesEdge)
+            {
+                keep = false;
+            }
+
+            if (!keep)
+            {
+                continue;
+            }
+
+            keptAny = true;
+            for (int c = 0; c < component.Count; c++)
+            {
+                filtered[component[c]] = true;
+            }
+        }
+
+        if (!keptAny)
+        {
+            System.Array.Copy(rawMask, filtered, rawMask.Length);
+        }
+
+        count = CountMaskTrue(filtered);
+        return filtered;
+    }
+
+    private int CountMaskTrue(bool[] mask)
+    {
+        int count = 0;
+        for (int i = 0; i < mask.Length; i++)
+        {
+            if (mask[i])
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private void ReadPointerState(out bool down, out bool held, out bool up, out Vector2 screenPosition)
+    {
+        down = false;
+        held = false;
+        up = false;
+        screenPosition = Input.mousePosition;
+
+        if (Input.touchCount > 0)
+        {
+            Touch touch = Input.GetTouch(0);
+            screenPosition = touch.position;
+            down = touch.phase == TouchPhase.Began;
+            held = touch.phase == TouchPhase.Began || touch.phase == TouchPhase.Moved || touch.phase == TouchPhase.Stationary;
+            up = touch.phase == TouchPhase.Ended || touch.phase == TouchPhase.Canceled;
+            return;
+        }
+
+        down = Input.GetMouseButtonDown(0);
+        held = Input.GetMouseButton(0);
+        up = Input.GetMouseButtonUp(0);
+    }
+
+    private bool TraceFromPointer(
+        Vector2 screenPosition,
+        float dt,
+        out bool touchedOffPath,
+        out float pointerSpeed,
+        out bool pointerInsideCookie)
+    {
+        touchedOffPath = false;
+        pointerSpeed = 0f;
+        pointerInsideCookie = false;
+
+        if (!TryGetTexturePixel(screenPosition, out Vector2Int currentPixel))
+        {
+            hasLastPixel = false;
+            return false;
+        }
+
+        pointerInsideCookie = true;
+
+        if (!hasLastPixel)
+        {
+            lastPixel = currentPixel;
+            hasLastPixel = true;
+
+            bool startsOnPath = IsNearTarget(currentPixel.x, currentPixel.y, GetEffectiveDetectionRadius());
+            if (startsOnPath)
+            {
+                PaintValid(currentPixel.x, currentPixel.y);
+            }
+            else
+            {
+                PaintInvalid(currentPixel.x, currentPixel.y);
+                touchedOffPath = true;
+            }
+
+            return startsOnPath;
+        }
+
+        float distance = Vector2.Distance(lastPixel, currentPixel);
+        pointerSpeed = distance / Mathf.Max(0.0001f, dt);
+        int steps = Mathf.Max(1, Mathf.CeilToInt(distance / Mathf.Max(0.1f, minCursorStepPixels)));
+
+        bool touchedPath = false;
+
+        for (int i = 1; i <= steps; i++)
+        {
+            float t = i / (float)steps;
+            int px = Mathf.RoundToInt(Mathf.Lerp(lastPixel.x, currentPixel.x, t));
+            int py = Mathf.RoundToInt(Mathf.Lerp(lastPixel.y, currentPixel.y, t));
+
+            bool onPath = IsNearTarget(px, py, GetEffectiveDetectionRadius());
+            if (onPath)
+            {
+                touchedPath = true;
+                PaintValid(px, py);
+            }
+            else
+            {
+                touchedOffPath = true;
+                PaintInvalid(px, py);
+            }
+        }
+
+        lastPixel = currentPixel;
+        return touchedPath;
+    }
+
+    private bool TryGetTexturePixel(Vector2 screenPosition, out Vector2Int pixel)
+    {
+        pixel = default;
+
+        if (galletaImage == null || textureWidth <= 0 || textureHeight <= 0)
+        {
+            return false;
+        }
+
+        Camera eventCamera = galletaImage.canvas != null && galletaImage.canvas.renderMode != RenderMode.ScreenSpaceOverlay
+            ? galletaImage.canvas.worldCamera
+            : null;
+
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(galletaImage.rectTransform, screenPosition, eventCamera, out Vector2 localPos))
+        {
+            return false;
+        }
+
+        return TryLocalToTexturePixel(localPos, out pixel);
+    }
+
+    private bool TryWorldToTexturePixel(Vector3 worldPosition, out Vector2Int pixel)
+    {
+        pixel = default;
+
+        if (galletaImage == null || textureWidth <= 0 || textureHeight <= 0)
+        {
+            return false;
+        }
+
+        Vector2 localPos = galletaImage.rectTransform.InverseTransformPoint(worldPosition);
+        return TryLocalToTexturePixel(localPos, out pixel);
+    }
+
+    private bool TryLocalToTexturePixel(Vector2 localPos, out Vector2Int pixel)
+    {
+        pixel = default;
+
+        if (galletaImage == null || textureWidth <= 0 || textureHeight <= 0)
         {
             return false;
         }
 
         Rect rect = galletaImage.rectTransform.rect;
-        Vector2 uv = new Vector2((localPos.x - rect.x) / rect.width, (localPos.y - rect.y) / rect.height);
-
-        if (uv.x < 0f || uv.x > 1f || uv.y < 0f || uv.y > 1f)
+        if (Mathf.Abs(rect.width) < 0.0001f || Mathf.Abs(rect.height) < 0.0001f)
         {
             return false;
         }
 
-        clickedInsideTexture = true;
+        float u = (localPos.x - rect.x) / rect.width;
+        float v = (localPos.y - rect.y) / rect.height;
 
-        int x = Mathf.Clamp(Mathf.FloorToInt(uv.x * texturaFigura.width), 0, texturaFigura.width - 1);
-        int y = Mathf.Clamp(Mathf.FloorToInt(uv.y * texturaFigura.height), 0, texturaFigura.height - 1);
-        Color pixel = texturaFigura.GetPixel(x, y);
+        if (u < 0f || u > 1f || v < 0f || v > 1f)
+        {
+            return false;
+        }
 
-        float diferencia = Vector4.Distance(pixel, colorFigura);
-        return diferencia <= tolerancia;
+        int x = Mathf.Clamp(Mathf.RoundToInt(u * (textureWidth - 1)), 0, textureWidth - 1);
+        int y = Mathf.Clamp(Mathf.RoundToInt(v * (textureHeight - 1)), 0, textureHeight - 1);
+        pixel = new Vector2Int(x, y);
+        return true;
+    }
+
+    private float GetPixelsPerUiAverage()
+    {
+        if (galletaImage == null || textureWidth <= 0 || textureHeight <= 0)
+        {
+            return 1f;
+        }
+
+        Rect rect = galletaImage.rectTransform.rect;
+        float widthUi = Mathf.Max(1f, Mathf.Abs(rect.width));
+        float heightUi = Mathf.Max(1f, Mathf.Abs(rect.height));
+        float pxPerUiX = textureWidth / widthUi;
+        float pxPerUiY = textureHeight / heightUi;
+        return Mathf.Max(0.01f, (pxPerUiX + pxPerUiY) * 0.5f);
+    }
+
+    private int GetEffectiveDetectionRadius()
+    {
+        return Mathf.Max(0, detectionRadius + assistRadiusBonus);
+    }
+
+    private int GetEffectiveValidBrushRadius()
+    {
+        return Mathf.Max(0, validBrushRadius + Mathf.CeilToInt(assistRadiusBonus * 0.5f));
+    }
+
+    private int GetEffectiveCutAssistRadius()
+    {
+        return Mathf.Max(1, cutAssistFillRadius + Mathf.CeilToInt(assistRadiusBonus * 0.5f));
+    }
+
+    private bool IsNearTarget(int x, int y, int radius)
+    {
+        if (targetMask == null || targetMask.Length == 0)
+        {
+            return false;
+        }
+
+        int r = Mathf.Max(0, radius);
+        int sqr = r * r;
+
+        for (int oy = -r; oy <= r; oy++)
+        {
+            int py = y + oy;
+            if (py < 0 || py >= textureHeight)
+            {
+                continue;
+            }
+
+            for (int ox = -r; ox <= r; ox++)
+            {
+                if (ox * ox + oy * oy > sqr)
+                {
+                    continue;
+                }
+
+                int px = x + ox;
+                if (px < 0 || px >= textureWidth)
+                {
+                    continue;
+                }
+
+                int index = py * textureWidth + px;
+                if (targetMask[index])
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private void PaintValid(int centerX, int centerY)
+    {
+        PaintBrush(centerX, centerY, GetEffectiveValidBrushRadius(), tracedPathColor, tracedPaintStrength, true, true, false);
+        ApplyCutAssistArea(centerX, centerY);
+    }
+
+    private void PaintInvalid(int centerX, int centerY)
+    {
+        PaintBrush(centerX, centerY, invalidBrushRadius, crackPathColor, crackPaintStrength, false, false, true);
+    }
+
+    private void PaintBrush(
+        int centerX,
+        int centerY,
+        int radius,
+        Color paintColor,
+        float paintStrength,
+        bool markVisited,
+        bool onlyTarget,
+        bool skipTarget)
+    {
+        if (runtimePixels == null || runtimePixels.Length == 0)
+        {
+            return;
+        }
+
+        int r = Mathf.Max(0, radius);
+        int sqr = r * r;
+
+        for (int oy = -r; oy <= r; oy++)
+        {
+            int py = centerY + oy;
+            if (py < 0 || py >= textureHeight)
+            {
+                continue;
+            }
+
+            for (int ox = -r; ox <= r; ox++)
+            {
+                if (ox * ox + oy * oy > sqr)
+                {
+                    continue;
+                }
+
+                int px = centerX + ox;
+                if (px < 0 || px >= textureWidth)
+                {
+                    continue;
+                }
+
+                int index = py * textureWidth + px;
+                bool isTarget = targetMask[index];
+
+                if (onlyTarget && !isTarget)
+                {
+                    continue;
+                }
+
+                if (skipTarget && isTarget)
+                {
+                    continue;
+                }
+
+                if (markVisited && isTarget && !visitedMask[index])
+                {
+                    visitedMask[index] = true;
+                    visitedPixelCount++;
+                }
+
+                runtimePixels[index] = Color.Lerp(runtimePixels[index], paintColor, paintStrength);
+                textureDirty = true;
+            }
+        }
+    }
+
+    private void ApplyCutAssistArea(int centerX, int centerY)
+    {
+        if (runtimePixels == null || runtimePixels.Length == 0 || targetMask == null || visitedMask == null)
+        {
+            return;
+        }
+
+        int radius = GetEffectiveCutAssistRadius();
+        int sqr = radius * radius;
+        int maxPixels = Mathf.Max(0, cutAssistMaxPixelsPerHit);
+        int filled = 0;
+
+        for (int oy = -radius; oy <= radius; oy++)
+        {
+            int py = centerY + oy;
+            if (py < 0 || py >= textureHeight)
+            {
+                continue;
+            }
+
+            for (int ox = -radius; ox <= radius; ox++)
+            {
+                if (ox * ox + oy * oy > sqr)
+                {
+                    continue;
+                }
+
+                int px = centerX + ox;
+                if (px < 0 || px >= textureWidth)
+                {
+                    continue;
+                }
+
+                int index = py * textureWidth + px;
+                if (!targetMask[index])
+                {
+                    continue;
+                }
+
+                if (!visitedMask[index])
+                {
+                    visitedMask[index] = true;
+                    visitedPixelCount++;
+                }
+
+                runtimePixels[index] = Color.Lerp(runtimePixels[index], tracedPathColor, cutAssistFillStrength);
+                textureDirty = true;
+                filled++;
+
+                if (maxPixels > 0 && filled >= maxPixels)
+                {
+                    return;
+                }
+            }
+        }
+    }
+
+    private void UpdatePressure(float dt, bool isHolding, bool touchedPath, bool touchedOffPath, float speed)
+    {
+        if (!isHolding)
+        {
+            pressure = Mathf.MoveTowards(pressure, 0f, pressureReleasePerSecond * dt);
+            return;
+        }
+
+        float buildRate = pressureBuildPerSecond;
+        if (touchedPath)
+        {
+            buildRate *= pressureBuildOnPathMultiplier;
+        }
+
+        if (touchedOffPath)
+        {
+            buildRate *= pressureBuildOffPathMultiplier;
+        }
+
+        if (speed < stationarySpeedThreshold)
+        {
+            buildRate += stationaryPressureBonus;
+        }
+
+        pressure = Mathf.Clamp01(pressure + buildRate * dt);
+
+        if (pressure > pressureThresholdToDamage)
+        {
+            float over = (pressure - pressureThresholdToDamage) / Mathf.Max(0.0001f, 1f - pressureThresholdToDamage);
+            ApplyDamage(pressureDamagePerSecond * over * dt);
+        }
+    }
+
+    private void ApplyDamage(float damage)
+    {
+        if (state != MatchState.Playing || damage <= 0f)
+        {
+            return;
+        }
+
+        float previousIntegrity = integrity;
+        integrity = Mathf.Max(0f, integrity - damage);
+
+        if (integrity <= 0f)
+        {
+            integrity = 0f;
+            CompleteMatch(false, "La galleta se rompio");
+            return;
+        }
+
+        if (integrity < previousIntegrity && Time.time >= nextDamageFlashTime)
+        {
+            nextDamageFlashTime = Time.time + damageFlashCooldown;
+            FlashTint(warningTint);
+            StartShake(1f);
+        }
+    }
+
+    private void UpdateCrackStageFeedback()
+    {
+        float loss = 1f - GetIntegrityRatio();
+        int newStage = Mathf.Clamp(Mathf.FloorToInt(loss * 4f), 0, 4);
+        if (newStage <= crackStage)
+        {
+            return;
+        }
+
+        crackStage = newStage;
+        FlashTint(Color.Lerp(warningTint, failTint, 0.35f));
+        StartShake(1.2f);
+    }
+
+    private float GetProgress()
+    {
+        if (targetPixelCount <= 0)
+        {
+            return 0f;
+        }
+
+        return Mathf.Clamp01(visitedPixelCount / (float)targetPixelCount);
+    }
+
+    private float GetIntegrityRatio()
+    {
+        if (maxIntegrity <= 0f)
+        {
+            return 0f;
+        }
+
+        return Mathf.Clamp01(integrity / maxIntegrity);
+    }
+
+    private void RefreshCookieTint()
+    {
+        if (galletaImage == null || tintOverrideActive || state == MatchState.Won || state == MatchState.Lost)
+        {
+            return;
+        }
+
+        float integrityRisk = 1f - GetIntegrityRatio();
+        float pressureRisk = pressure;
+        float baseRisk = Mathf.Clamp01((integrityRisk * 0.72f) + (pressureRisk * 0.35f));
+
+        Color tint = Color.Lerp(neutralTint, warningTint, baseRisk);
+        float hotPressure = Mathf.InverseLerp(pressureThresholdToDamage, 1f, pressure);
+        tint = Color.Lerp(tint, highPressureTint, hotPressure);
+
+        galletaImage.color = tint;
     }
 
     private void FlashTint(Color tint)
     {
-        if (galletaImage == null)
+        if (galletaImage == null || state == MatchState.Won || state == MatchState.Lost)
         {
             return;
         }
@@ -272,58 +1292,399 @@ public class DalgonaGameManager : MonoBehaviour
 
     private IEnumerator FlashTintRoutine(Color tint)
     {
-        if (galletaImage == null)
+        tintOverrideActive = true;
+        galletaImage.color = tint;
+        yield return new WaitForSeconds(flashDuration);
+        tintOverrideActive = false;
+        tintRoutine = null;
+        RefreshCookieTint();
+    }
+
+    private void StartShake(float multiplier)
+    {
+        if (cookieRect == null || shakeDuration <= 0f || shakeStrength <= 0f)
         {
-            yield break;
+            return;
         }
 
-        Color baseColor = ComputeBaseTint();
-        galletaImage.color = tint;
+        if (shakeRoutine != null)
+        {
+            StopCoroutine(shakeRoutine);
+        }
 
-        yield return new WaitForSeconds(flashDuration);
+        shakeRoutine = StartCoroutine(ShakeRoutine(multiplier));
+    }
 
+    private IEnumerator ShakeRoutine(float multiplier)
+    {
+        float elapsed = 0f;
+        float baseStrength = Mathf.Max(0f, shakeStrength * multiplier);
+
+        while (elapsed < shakeDuration)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / shakeDuration);
+            float strength = Mathf.Lerp(baseStrength, 0f, t);
+            cookieRect.anchoredPosition = cookieBasePosition + (Random.insideUnitCircle * strength);
+            yield return null;
+        }
+
+        cookieRect.anchoredPosition = cookieBasePosition;
+        shakeRoutine = null;
+    }
+
+    private void ApplyRuntimeTextureIfNeeded()
+    {
+        if (!textureDirty || runtimeTexture == null || runtimePixels == null)
+        {
+            return;
+        }
+
+        if (Time.unscaledTime < nextTextureApplyTime)
+        {
+            return;
+        }
+
+        runtimeTexture.SetPixels(runtimePixels);
+        runtimeTexture.Apply(false);
+        textureDirty = false;
+        nextTextureApplyTime = Time.unscaledTime + Mathf.Max(0.005f, textureApplyInterval);
+    }
+
+    private void ForceApplyRuntimeTexture()
+    {
+        if (runtimeTexture == null || runtimePixels == null)
+        {
+            return;
+        }
+
+        runtimeTexture.SetPixels(runtimePixels);
+        runtimeTexture.Apply(false);
+        textureDirty = false;
+    }
+
+    private void CompleteMatch(bool success, string message)
+    {
+        if (state == MatchState.Won || state == MatchState.Lost)
+        {
+            return;
+        }
+
+        state = success ? MatchState.Won : MatchState.Lost;
+        pointerHeld = false;
+        hasLastPixel = false;
+        SetScissorCursorVisible(false);
+        UpdateStatus(message);
+
+        if (success)
+        {
+            ForceApplyRuntimeTexture();
+        }
+        else
+        {
+            StartShake(1.8f);
+        }
+
+        if (tintRoutine != null)
+        {
+            StopCoroutine(tintRoutine);
+            tintRoutine = null;
+        }
+
+        tintOverrideActive = true;
         if (galletaImage != null)
         {
-            galletaImage.color = baseColor;
+            galletaImage.color = success ? successTint : failTint;
         }
 
-        tintRoutine = null;
+        StartCoroutine(FinishAndReport(success));
     }
 
-    private void UpdateAttemptVisual()
+    private IEnumerator FinishAndReport(bool success)
     {
-        if (galletaImage != null && tintRoutine == null)
+        yield return new WaitForSeconds(Mathf.Max(0.05f, finishDelay));
+        OnGameFinished?.Invoke(success);
+    }
+
+    private void EnsureHudBuilt()
+    {
+        if (!createRuntimeHud || galletaImage == null)
         {
-            galletaImage.color = ComputeBaseTint();
+            return;
         }
 
-        for (int i = 0; i < attemptDots.Count; i++)
+        if (hudRoot == null)
         {
-            Image dot = attemptDots[i];
-            if (dot == null || !dot.gameObject.activeSelf)
+            RectTransform parent = galletaImage.rectTransform.parent as RectTransform;
+            if (parent == null)
             {
-                continue;
+                return;
             }
 
-            dot.color = i < attemptsLeft ? attemptAvailableColor : attemptUsedColor;
+            GameObject root = new GameObject("DalgonaRuntimeHUD", typeof(RectTransform), typeof(Image));
+            hudRoot = root.GetComponent<RectTransform>();
+            hudRoot.SetParent(parent, false);
+        }
+
+        hudRoot.anchorMin = new Vector2(0.5f, 0.5f);
+        hudRoot.anchorMax = new Vector2(0.5f, 0.5f);
+        hudRoot.pivot = new Vector2(0.5f, 0.5f);
+        hudRoot.anchoredPosition = hudAnchoredPosition;
+        hudRoot.sizeDelta = hudSize;
+
+        Image rootImage = hudRoot.GetComponent<Image>();
+        if (rootImage != null)
+        {
+            rootImage.color = hudBackgroundColor;
+            rootImage.raycastTarget = false;
+        }
+
+        if (progressFill == null)
+        {
+            progressFill = CreateBarFill("ProgressBar", barSpacing, progressBarColor);
+        }
+
+        if (integrityFill == null)
+        {
+            integrityFill = CreateBarFill("IntegrityBar", 0f, integrityBarColor);
+        }
+
+        if (pressureFill == null)
+        {
+            pressureFill = CreateBarFill("PressureBar", -barSpacing, pressureBarColor);
         }
     }
 
-    private Color ComputeBaseTint()
+    private Image CreateBarFill(string barName, float yOffset, Color fillColor)
     {
-        if (maxAttemptsThisRound <= 0)
+        if (hudRoot == null)
         {
-            return neutralTint;
+            return null;
         }
 
-        float attemptsRatio = Mathf.Clamp01(attemptsLeft / (float)maxAttemptsThisRound);
-        float risk = 1f - attemptsRatio;
-        return Color.Lerp(neutralTint, warningTint, risk * riskTintStrength);
+        GameObject bgObject = new GameObject(barName + "_Bg", typeof(RectTransform), typeof(Image));
+        RectTransform bgRect = bgObject.GetComponent<RectTransform>();
+        bgRect.SetParent(hudRoot, false);
+        bgRect.anchorMin = new Vector2(0.5f, 0.5f);
+        bgRect.anchorMax = new Vector2(0.5f, 0.5f);
+        bgRect.pivot = new Vector2(0.5f, 0.5f);
+        bgRect.anchoredPosition = new Vector2(0f, yOffset);
+        bgRect.sizeDelta = barSize;
+
+        Image bgImage = bgObject.GetComponent<Image>();
+        bgImage.color = new Color(0f, 0f, 0f, 0.42f);
+        bgImage.raycastTarget = false;
+
+        GameObject fillObject = new GameObject("Fill", typeof(RectTransform), typeof(Image));
+        RectTransform fillRect = fillObject.GetComponent<RectTransform>();
+        fillRect.SetParent(bgRect, false);
+        fillRect.anchorMin = new Vector2(0f, 0f);
+        fillRect.anchorMax = new Vector2(1f, 1f);
+        fillRect.offsetMin = Vector2.zero;
+        fillRect.offsetMax = Vector2.zero;
+
+        Image fillImage = fillObject.GetComponent<Image>();
+        fillImage.color = fillColor;
+        fillImage.type = Image.Type.Filled;
+        fillImage.fillMethod = Image.FillMethod.Horizontal;
+        fillImage.fillOrigin = (int)Image.OriginHorizontal.Left;
+        fillImage.fillAmount = 1f;
+        fillImage.raycastTarget = false;
+        return fillImage;
+    }
+
+    private void UpdateHud(bool force = false)
+    {
+        if (!createRuntimeHud)
+        {
+            return;
+        }
+
+        EnsureHudBuilt();
+
+        if (progressFill != null)
+        {
+            progressFill.fillAmount = GetProgress();
+            progressFill.color = progressBarColor;
+        }
+
+        if (integrityFill != null)
+        {
+            float ratio = GetIntegrityRatio();
+            integrityFill.fillAmount = ratio;
+            integrityFill.color = Color.Lerp(failTint, integrityBarColor, ratio);
+        }
+
+        if (pressureFill != null)
+        {
+            pressureFill.fillAmount = Mathf.Clamp01(pressure);
+            float danger = Mathf.InverseLerp(pressureThresholdToDamage, 1f, pressure);
+            pressureFill.color = Color.Lerp(pressureBarColor, failTint, danger);
+        }
+
+        if (force)
+        {
+            RefreshCookieTint();
+        }
+    }
+
+    private void EnsureScissorCursor()
+    {
+        if (!showScissorCursor || galletaImage == null || scissorCursorRoot != null)
+        {
+            return;
+        }
+
+        Canvas canvas = galletaImage.canvas;
+        if (canvas == null)
+        {
+            return;
+        }
+
+        RectTransform parent = canvas.transform as RectTransform;
+        if (parent == null)
+        {
+            return;
+        }
+
+        GameObject root = new GameObject("ScissorCursor", typeof(RectTransform));
+        scissorCursorRoot = root.GetComponent<RectTransform>();
+        scissorCursorRoot.SetParent(parent, false);
+        scissorCursorRoot.anchorMin = new Vector2(0.5f, 0.5f);
+        scissorCursorRoot.anchorMax = new Vector2(0.5f, 0.5f);
+        scissorCursorRoot.pivot = new Vector2(0.5f, 0.5f);
+        scissorCursorRoot.sizeDelta = scissorCursorSize;
+        scissorCurrentAngle = scissorIdleAngle;
+        scissorTargetAngle = scissorIdleAngle;
+
+        scissorBladeTop = CreateScissorPart("BladeTop", scissorBladeSize, scissorBladeColor);
+        scissorBladeBottom = CreateScissorPart("BladeBottom", scissorBladeSize, scissorBladeColor);
+        scissorHandle = CreateScissorPart("Handle", new Vector2(8f, 8f), scissorHandleColor);
+    }
+
+    private RectTransform CreateScissorPart(string partName, Vector2 size, Color color)
+    {
+        if (scissorCursorRoot == null)
+        {
+            return null;
+        }
+
+        GameObject part = new GameObject(partName, typeof(RectTransform), typeof(RawImage));
+        RectTransform rect = part.GetComponent<RectTransform>();
+        rect.SetParent(scissorCursorRoot, false);
+        rect.anchorMin = new Vector2(0.5f, 0.5f);
+        rect.anchorMax = new Vector2(0.5f, 0.5f);
+        rect.pivot = new Vector2(0.08f, 0.5f);
+        rect.sizeDelta = size;
+
+        RawImage image = part.GetComponent<RawImage>();
+        image.texture = Texture2D.whiteTexture;
+        image.color = color;
+        image.raycastTarget = false;
+        return rect;
+    }
+
+    private void UpdateScissorCursor(Vector2 screenPosition, bool isCutting)
+    {
+        if (!showScissorCursor)
+        {
+            SetScissorCursorVisible(false);
+            return;
+        }
+
+        EnsureScissorCursor();
+        if (scissorCursorRoot == null)
+        {
+            return;
+        }
+
+        SetScissorCursorVisible(true);
+
+        Canvas canvas = galletaImage != null ? galletaImage.canvas : null;
+        if (canvas == null)
+        {
+            return;
+        }
+
+        RectTransform canvasRect = canvas.transform as RectTransform;
+        if (canvasRect == null)
+        {
+            return;
+        }
+
+        Camera eventCamera = canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : canvas.worldCamera;
+        if (RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRect, screenPosition, eventCamera, out Vector2 localPos))
+        {
+            float follow = 1f - Mathf.Exp(-Mathf.Max(1f, scissorSmooth) * Time.deltaTime);
+            scissorCursorRoot.anchoredPosition = Vector2.Lerp(scissorCursorRoot.anchoredPosition, localPos, follow);
+        }
+
+        if (!hasScissorLastScreenPosition)
+        {
+            scissorLastScreenPosition = screenPosition;
+            hasScissorLastScreenPosition = true;
+            scissorCurrentAngle = scissorIdleAngle;
+            scissorTargetAngle = scissorIdleAngle;
+        }
+
+        Vector2 delta = screenPosition - scissorLastScreenPosition;
+        float moveThresholdSqr = Mathf.Max(0f, scissorMovementThreshold) * Mathf.Max(0f, scissorMovementThreshold);
+        if (rotateScissorWithMovement && isCutting && delta.sqrMagnitude >= moveThresholdSqr)
+        {
+            scissorTargetAngle = (Mathf.Atan2(delta.y, delta.x) * Mathf.Rad2Deg) + 20f;
+        }
+        else
+        {
+            scissorTargetAngle = scissorIdleAngle;
+        }
+
+        float angleFollow = 1f - Mathf.Exp(-Mathf.Max(1f, scissorSmooth) * Time.deltaTime);
+        scissorCurrentAngle = Mathf.LerpAngle(scissorCurrentAngle, scissorTargetAngle, angleFollow);
+
+        scissorLastScreenPosition = screenPosition;
+        hasScissorLastScreenPosition = true;
+
+        float closeTarget = isCutting ? scissorClosedAngle : scissorOpenAngle;
+        float pulse = Mathf.Sin(Time.unscaledTime * scissorPulseSpeed) * (isCutting ? 1.2f : 3f);
+        float openAngle = Mathf.Max(1.5f, closeTarget + pulse);
+
+        scissorCursorRoot.localRotation = Quaternion.Euler(0f, 0f, scissorCurrentAngle);
+        if (scissorBladeTop != null)
+        {
+            scissorBladeTop.localRotation = Quaternion.Euler(0f, 0f, openAngle);
+        }
+
+        if (scissorBladeBottom != null)
+        {
+            scissorBladeBottom.localRotation = Quaternion.Euler(0f, 0f, -openAngle);
+        }
+
+        if (scissorHandle != null)
+        {
+            scissorHandle.anchoredPosition = new Vector2(-2f, 0f);
+            scissorHandle.localRotation = Quaternion.Euler(0f, 0f, 45f);
+        }
+    }
+
+    private void SetScissorCursorVisible(bool visible)
+    {
+        if (scissorCursorRoot == null)
+        {
+            return;
+        }
+
+        scissorCursorRoot.gameObject.SetActive(visible);
     }
 
     private void UpdateStatus(string message)
     {
-        if (!useStatusText || statusText == null)
+        if (statusText == null)
+        {
+            return;
+        }
+
+        statusText.gameObject.SetActive(useStatusText);
+        if (!useStatusText)
         {
             return;
         }
@@ -331,75 +1692,18 @@ public class DalgonaGameManager : MonoBehaviour
         statusText.text = message;
     }
 
-    private void EnsureAttemptsContainer()
+    private void StopFeedbackCoroutines()
     {
-        if (attemptsContainer != null)
+        if (tintRoutine != null)
         {
-            return;
+            StopCoroutine(tintRoutine);
+            tintRoutine = null;
         }
 
-        RectTransform parentRect = galletaImage != null
-            ? galletaImage.rectTransform
-            : GetComponentInChildren<Canvas>(true)?.GetComponent<RectTransform>();
-
-        if (parentRect == null)
+        if (shakeRoutine != null)
         {
-            return;
-        }
-
-        GameObject containerObject = new GameObject("DalgonaAttempts", typeof(RectTransform), typeof(HorizontalLayoutGroup));
-        RectTransform rect = containerObject.GetComponent<RectTransform>();
-        rect.SetParent(parentRect, false);
-        rect.anchorMin = new Vector2(0.5f, 0.5f);
-        rect.anchorMax = new Vector2(0.5f, 0.5f);
-        rect.pivot = new Vector2(0.5f, 0.5f);
-        rect.anchoredPosition = attemptsAnchoredPosition;
-        rect.sizeDelta = new Vector2(220f, 26f);
-
-        HorizontalLayoutGroup layout = containerObject.GetComponent<HorizontalLayoutGroup>();
-        layout.childAlignment = TextAnchor.MiddleCenter;
-        layout.spacing = attemptsSpacing;
-        layout.childControlWidth = false;
-        layout.childControlHeight = false;
-        layout.childForceExpandWidth = false;
-        layout.childForceExpandHeight = false;
-
-        attemptsContainer = rect;
-    }
-
-    private void BuildAttemptDots(int total)
-    {
-        if (attemptsContainer == null)
-        {
-            EnsureAttemptsContainer();
-        }
-
-        if (attemptsContainer == null)
-        {
-            return;
-        }
-
-        while (attemptDots.Count < total)
-        {
-            GameObject dotObject = new GameObject("AttemptDot", typeof(RectTransform), typeof(Image));
-            RectTransform rect = dotObject.GetComponent<RectTransform>();
-            rect.SetParent(attemptsContainer, false);
-            rect.sizeDelta = attemptsDotSize;
-            rect.localScale = Vector3.one;
-
-            Image dotImage = dotObject.GetComponent<Image>();
-            dotImage.color = attemptAvailableColor;
-            attemptDots.Add(dotImage);
-        }
-
-        for (int i = 0; i < attemptDots.Count; i++)
-        {
-            bool active = i < total;
-            attemptDots[i].gameObject.SetActive(active);
-            if (active)
-            {
-                attemptDots[i].rectTransform.localScale = Vector3.one;
-            }
+            StopCoroutine(shakeRoutine);
+            shakeRoutine = null;
         }
     }
 }
