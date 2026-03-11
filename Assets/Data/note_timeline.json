@@ -1,0 +1,14 @@
+{
+  "bpm": 100,
+  "notes": [
+    { "time": 1.2, "type": "Left" },
+    { "time": 1.8, "type": "Down" },
+    { "time": 2.4, "type": "Up" },
+    { "time": 3.0, "type": "Right" },
+    { "time": 3.6, "type": "Left" },
+    { "time": 4.2, "type": "Down" },
+    { "time": 4.8, "type": "Up" },
+    { "time": 5.4, "type": "Right" },
+    { "time": 6.0, "type": "Down" }
+  ]
+}
