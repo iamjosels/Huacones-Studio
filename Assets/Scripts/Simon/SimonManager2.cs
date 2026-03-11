@@ -49,6 +49,9 @@ public class SimonManager2 : MonoBehaviour
     public float progressSpacing = 10f;
     public Color dotPendingColor = new Color(1f, 1f, 1f, 0.28f);
     public Color dotDoneColor = new Color(1f, 1f, 1f, 0.95f);
+    public Color dotPlaybackColor = new Color(0.72f, 0.92f, 1f, 0.95f);
+    public float dotPopScale = 1.28f;
+    public float dotPopDuration = 0.08f;
 
     private readonly List<Button> availableButtons = new();
     private readonly List<Button> pattern = new();
@@ -245,11 +248,14 @@ public class SimonManager2 : MonoBehaviour
 
         yield return new WaitForSeconds(0.65f);
 
-        foreach (Button button in pattern)
+        for (int i = 0; i < pattern.Count; i++)
         {
-            yield return StartCoroutine(FlashButton(button, 1f, 1.2f));
+            AnimateProgressDot(i, dotPlaybackColor);
+            yield return StartCoroutine(FlashButton(pattern[i], 1f, 1.2f));
             yield return new WaitForSeconds(timeBetweenFlashes);
         }
+
+        UpdateProgressDots(0);
 
         isFlashing = false;
         isPlayerTurn = true;
@@ -337,6 +343,7 @@ public class SimonManager2 : MonoBehaviour
         }
 
         UpdateProgressDots(playerInput.Count);
+        AnimateProgressDot(playerInput.Count - 1, dotDoneColor);
 
         if (playerInput.Count == pattern.Count)
         {
@@ -458,6 +465,7 @@ public class SimonManager2 : MonoBehaviour
 
             Image dot = dotObject.GetComponent<Image>();
             dot.color = dotPendingColor;
+            dot.rectTransform.localScale = Vector3.one;
             progressDots.Add(dot);
         }
 
@@ -481,6 +489,34 @@ public class SimonManager2 : MonoBehaviour
 
             progressDots[i].color = i < completed ? dotDoneColor : dotPendingColor;
         }
+    }
+
+    private void AnimateProgressDot(int index, Color targetColor)
+    {
+        if (index < 0 || index >= progressDots.Count)
+        {
+            return;
+        }
+
+        Image dot = progressDots[index];
+        if (dot == null || !dot.gameObject.activeSelf)
+        {
+            return;
+        }
+
+        StartCoroutine(PopDotRoutine(dot, targetColor));
+    }
+
+    private IEnumerator PopDotRoutine(Image dot, Color targetColor)
+    {
+        RectTransform rect = dot.rectTransform;
+        Vector3 baseScale = Vector3.one;
+
+        dot.color = targetColor;
+        rect.localScale = baseScale * dotPopScale;
+        yield return new WaitForSeconds(dotPopDuration);
+
+        rect.localScale = baseScale;
     }
 
     private void SetStatus(string message)

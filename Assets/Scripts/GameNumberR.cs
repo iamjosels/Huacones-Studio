@@ -11,6 +11,7 @@ public class GameNumberR : MonoBehaviour
     public Transform numerosContainer;
     public GameObject draggableNumberPrefab;
     public Sprite[] numeroSprites;
+    public GridLayoutGroup numerosLayoutGroup;
 
     [Header("Slots")]
     public GameObject slotPrefab;
@@ -28,6 +29,22 @@ public class GameNumberR : MonoBehaviour
 
     [Header("Posiciones de slots (locales)")]
     public Vector2[] slotPositions = new Vector2[10];
+
+    [Header("Layout visual de numeros")]
+    public bool spreadNumbersInBottomArea = true;
+    public Vector2 spreadAreaSize = new Vector2(1500f, 230f);
+    public Vector2 spreadAreaAnchoredPosition = new Vector2(0f, 120f);
+    public Vector2 spreadAreaPadding = new Vector2(70f, 28f);
+    public float spreadXJitter = 52f;
+    public float spreadYJitter = 24f;
+    public float spreadRotationRange = 15f;
+
+    [Header("Fallback en grilla (si spread esta desactivado)")]
+    public int spawnColumns = 5;
+    public Vector2 spawnCellSize = new Vector2(100f, 100f);
+    public Vector2 spawnSpacing = new Vector2(16f, 16f);
+    public Vector2 spawnAnchoredPosition = new Vector2(-560f, -210f);
+    public Vector3 spawnContainerScale = Vector3.one;
 
     private bool initialized;
     private int rondaActual = 1;
@@ -49,6 +66,7 @@ public class GameNumberR : MonoBehaviour
     private void Start()
     {
         tiempoRestante = tiempoLimite;
+        ConfigureNumberSpawnLayout();
         EnsureBoardGenerated();
         juegoActivo = true;
         UpdateTimerText();
@@ -126,6 +144,8 @@ public class GameNumberR : MonoBehaviour
 
     private void GenerarNumerosAleatorios()
     {
+        ConfigureNumberSpawnLayout();
+
         List<int> numeros = new();
         for (int i = 1; i <= 10; i++)
         {
@@ -138,13 +158,35 @@ public class GameNumberR : MonoBehaviour
             (numeros[i], numeros[randomIndex]) = (numeros[randomIndex], numeros[i]);
         }
 
-        foreach (int numero in numeros)
+        List<Vector2> spreadPositions = spreadNumbersInBottomArea
+            ? GenerateBottomSpreadPositions(numeros.Count)
+            : null;
+
+        for (int i = 0; i < numeros.Count; i++)
         {
+            int numero = numeros[i];
             GameObject nuevo = Instantiate(draggableNumberPrefab, numerosContainer);
             nuevo.transform.localScale = Vector3.one;
 
             DraggableNumber script = nuevo.GetComponent<DraggableNumber>();
             script.numero = numero;
+
+            RectTransform numberRect = nuevo.GetComponent<RectTransform>();
+            if (numberRect != null)
+            {
+                if (spreadNumbersInBottomArea && spreadPositions != null && i < spreadPositions.Count)
+                {
+                    numberRect.anchorMin = new Vector2(0.5f, 0.5f);
+                    numberRect.anchorMax = new Vector2(0.5f, 0.5f);
+                    numberRect.pivot = new Vector2(0.5f, 0.5f);
+                    numberRect.anchoredPosition = spreadPositions[i];
+                    numberRect.localRotation = Quaternion.Euler(0f, 0f, Random.Range(-spreadRotationRange, spreadRotationRange));
+                }
+                else
+                {
+                    numberRect.localRotation = Quaternion.identity;
+                }
+            }
 
             Image image = nuevo.GetComponent<Image>();
             image.sprite = numeroSprites[numero - 1];
@@ -179,6 +221,8 @@ public class GameNumberR : MonoBehaviour
 
     public void ResetGame()
     {
+        ConfigureNumberSpawnLayout();
+
         if (slotContainer != null)
         {
             for (int i = slotContainer.childCount - 1; i >= 0; i--)
@@ -228,5 +272,101 @@ public class GameNumberR : MonoBehaviour
 
         tiempoRestante = tiempoLimite;
         UpdateTimerText();
+    }
+
+    private void ConfigureNumberSpawnLayout()
+    {
+        if (numerosContainer == null)
+        {
+            return;
+        }
+
+        RectTransform numbersRect = numerosContainer as RectTransform;
+        if (numbersRect != null)
+        {
+            numbersRect.localScale = spawnContainerScale;
+
+            if (spreadNumbersInBottomArea)
+            {
+                numbersRect.anchorMin = new Vector2(0.5f, 0f);
+                numbersRect.anchorMax = new Vector2(0.5f, 0f);
+                numbersRect.pivot = new Vector2(0.5f, 0.5f);
+                numbersRect.anchoredPosition = spreadAreaAnchoredPosition;
+                numbersRect.sizeDelta = new Vector2(
+                    Mathf.Max(200f, spreadAreaSize.x),
+                    Mathf.Max(120f, spreadAreaSize.y));
+            }
+            else
+            {
+                numbersRect.anchorMin = new Vector2(0.5f, 0.5f);
+                numbersRect.anchorMax = new Vector2(0.5f, 0.5f);
+                numbersRect.pivot = new Vector2(0.5f, 0.5f);
+                numbersRect.anchoredPosition = spawnAnchoredPosition;
+            }
+        }
+
+        GridLayoutGroup layout = numerosLayoutGroup != null
+            ? numerosLayoutGroup
+            : numerosContainer.GetComponent<GridLayoutGroup>();
+
+        if (layout == null)
+        {
+            return;
+        }
+
+        if (spreadNumbersInBottomArea)
+        {
+            layout.enabled = false;
+            return;
+        }
+
+        layout.enabled = true;
+        layout.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+        layout.constraintCount = Mathf.Max(1, spawnColumns);
+        layout.cellSize = spawnCellSize;
+        layout.spacing = spawnSpacing;
+        layout.startAxis = GridLayoutGroup.Axis.Horizontal;
+        layout.startCorner = GridLayoutGroup.Corner.UpperLeft;
+    }
+
+    private List<Vector2> GenerateBottomSpreadPositions(int count)
+    {
+        List<Vector2> positions = new(count);
+        if (count <= 0)
+        {
+            return positions;
+        }
+
+        float width = Mathf.Max(200f, spreadAreaSize.x);
+        float height = Mathf.Max(120f, spreadAreaSize.y);
+
+        float left = -width * 0.5f + spreadAreaPadding.x;
+        float right = width * 0.5f - spreadAreaPadding.x;
+        float bottom = -height * 0.5f + spreadAreaPadding.y;
+        float top = height * 0.5f - spreadAreaPadding.y;
+
+        float safeXJitter = Mathf.Max(0f, spreadXJitter);
+        float safeYJitter = Mathf.Max(0f, spreadYJitter);
+
+        for (int i = 0; i < count; i++)
+        {
+            float t = count == 1 ? 0.5f : (float)i / (count - 1);
+            float xBase = Mathf.Lerp(left, right, t);
+            float x = Mathf.Clamp(xBase + Random.Range(-safeXJitter, safeXJitter), left, right);
+
+            float lane = (i % 2 == 0) ? 0.32f : 0.72f;
+            float yBase = Mathf.Lerp(bottom, top, lane);
+            float y = Mathf.Clamp(yBase + Random.Range(-safeYJitter, safeYJitter), bottom, top);
+
+            positions.Add(new Vector2(x, y));
+        }
+
+        for (int i = 0; i < positions.Count; i++)
+        {
+            int randomIndex = Random.Range(i, positions.Count);
+            (positions[i], positions[randomIndex]) = (positions[randomIndex], positions[i]);
+        }
+
+        return positions;
     }
 }

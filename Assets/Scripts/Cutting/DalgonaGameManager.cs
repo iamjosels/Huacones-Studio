@@ -35,6 +35,14 @@ public class DalgonaGameManager : MonoBehaviour
     public float flashDuration = 0.16f;
     public float riskTintStrength = 0.7f;
 
+    [Header("Intentos visuales")]
+    public Transform attemptsContainer;
+    public Vector2 attemptsAnchoredPosition = new Vector2(0f, -165f);
+    public Vector2 attemptsDotSize = new Vector2(18f, 18f);
+    public float attemptsSpacing = 11f;
+    public Color attemptAvailableColor = new Color(1f, 1f, 1f, 0.95f);
+    public Color attemptUsedColor = new Color(1f, 1f, 1f, 0.2f);
+
     public System.Action<bool> OnGameFinished;
 
     private bool juegoActivo;
@@ -45,10 +53,12 @@ public class DalgonaGameManager : MonoBehaviour
     private float baseTolerance;
     private Texture2D texturaFigura;
     private Coroutine tintRoutine;
+    private readonly List<Image> attemptDots = new();
 
     private void Awake()
     {
         baseTolerance = tolerancia;
+        EnsureAttemptsContainer();
 
         if (statusText == null && autoFindStatusText)
         {
@@ -77,6 +87,7 @@ public class DalgonaGameManager : MonoBehaviour
         tolerancia = Mathf.Max(minimumTolerance, baseTolerance - (ronda - 1) * toleranceReductionPerRound);
         maxAttemptsThisRound = Mathf.Max(minAttempts, baseAttempts - (ronda - 1));
         attemptsLeft = maxAttemptsThisRound;
+        BuildAttemptDots(maxAttemptsThisRound);
 
         if (juegoActivo)
         {
@@ -97,6 +108,8 @@ public class DalgonaGameManager : MonoBehaviour
             maxAttemptsThisRound = Mathf.Max(minAttempts, baseAttempts - (ronda - 1));
             attemptsLeft = maxAttemptsThisRound;
         }
+
+        BuildAttemptDots(maxAttemptsThisRound);
 
         juegoActivo = true;
         waitingRetryFeedback = false;
@@ -279,14 +292,20 @@ public class DalgonaGameManager : MonoBehaviour
 
     private void UpdateAttemptVisual()
     {
-        if (galletaImage == null)
-        {
-            return;
-        }
-
-        if (tintRoutine == null)
+        if (galletaImage != null && tintRoutine == null)
         {
             galletaImage.color = ComputeBaseTint();
+        }
+
+        for (int i = 0; i < attemptDots.Count; i++)
+        {
+            Image dot = attemptDots[i];
+            if (dot == null || !dot.gameObject.activeSelf)
+            {
+                continue;
+            }
+
+            dot.color = i < attemptsLeft ? attemptAvailableColor : attemptUsedColor;
         }
     }
 
@@ -310,5 +329,77 @@ public class DalgonaGameManager : MonoBehaviour
         }
 
         statusText.text = message;
+    }
+
+    private void EnsureAttemptsContainer()
+    {
+        if (attemptsContainer != null)
+        {
+            return;
+        }
+
+        RectTransform parentRect = galletaImage != null
+            ? galletaImage.rectTransform
+            : GetComponentInChildren<Canvas>(true)?.GetComponent<RectTransform>();
+
+        if (parentRect == null)
+        {
+            return;
+        }
+
+        GameObject containerObject = new GameObject("DalgonaAttempts", typeof(RectTransform), typeof(HorizontalLayoutGroup));
+        RectTransform rect = containerObject.GetComponent<RectTransform>();
+        rect.SetParent(parentRect, false);
+        rect.anchorMin = new Vector2(0.5f, 0.5f);
+        rect.anchorMax = new Vector2(0.5f, 0.5f);
+        rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.anchoredPosition = attemptsAnchoredPosition;
+        rect.sizeDelta = new Vector2(220f, 26f);
+
+        HorizontalLayoutGroup layout = containerObject.GetComponent<HorizontalLayoutGroup>();
+        layout.childAlignment = TextAnchor.MiddleCenter;
+        layout.spacing = attemptsSpacing;
+        layout.childControlWidth = false;
+        layout.childControlHeight = false;
+        layout.childForceExpandWidth = false;
+        layout.childForceExpandHeight = false;
+
+        attemptsContainer = rect;
+    }
+
+    private void BuildAttemptDots(int total)
+    {
+        if (attemptsContainer == null)
+        {
+            EnsureAttemptsContainer();
+        }
+
+        if (attemptsContainer == null)
+        {
+            return;
+        }
+
+        while (attemptDots.Count < total)
+        {
+            GameObject dotObject = new GameObject("AttemptDot", typeof(RectTransform), typeof(Image));
+            RectTransform rect = dotObject.GetComponent<RectTransform>();
+            rect.SetParent(attemptsContainer, false);
+            rect.sizeDelta = attemptsDotSize;
+            rect.localScale = Vector3.one;
+
+            Image dotImage = dotObject.GetComponent<Image>();
+            dotImage.color = attemptAvailableColor;
+            attemptDots.Add(dotImage);
+        }
+
+        for (int i = 0; i < attemptDots.Count; i++)
+        {
+            bool active = i < total;
+            attemptDots[i].gameObject.SetActive(active);
+            if (active)
+            {
+                attemptDots[i].rectTransform.localScale = Vector3.one;
+            }
+        }
     }
 }

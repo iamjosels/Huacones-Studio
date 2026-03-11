@@ -89,3 +89,6 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   currentNumber: {fileID: 0}
+  numberOffset: {x: 0, y: 0}
+  validHoverColor: {r: 0.72, g: 1, b: 0.75, a: 0.95}
+  invalidHoverColor: {r: 1, g: 0.72, b: 0.72, a: 0.95}
