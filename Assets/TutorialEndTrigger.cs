@@ -1,5 +1,4 @@
 using UnityEngine;
-using UnityEngine.SceneManagement;
 
 public class TutorialEndTrigger : MonoBehaviour
 {
@@ -8,6 +7,6 @@ public class TutorialEndTrigger : MonoBehaviour
     public void EndTutorial()
     {
         CutsceneLoader.cutsceneToLoad = tutorialToRitmoCutscene;
-        SceneManager.LoadScene("CutsceneViewer");
+        SceneTransitionManager.EnsureInstance().LoadSceneSafe("CutsceneViewer");
     }
 }

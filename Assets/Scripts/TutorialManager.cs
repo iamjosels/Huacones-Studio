@@ -1,5 +1,4 @@
 ﻿using UnityEngine;
-using UnityEngine.SceneManagement;
 using System.Collections;
 
 public class TutorialManager : MonoBehaviour
@@ -68,13 +67,11 @@ public class TutorialManager : MonoBehaviour
         hasFinished = true;
 
         CutsceneLoader.cutsceneToLoad = tutorialToRitmoCutscene;
-        // Si tienes un SceneTransitionManager, úsalo aquí:
-        // SceneTransitionManager.I.LoadSceneSafe("CutsceneViewer");
-        SceneManager.LoadScene("CutsceneViewer");
+        SceneTransitionManager.EnsureInstance().LoadSceneSafe("CutsceneViewer");
     }
 
     public void OnBackToMenuPressed()
     {
-        SceneManager.LoadScene("MainMenu");
+        SceneTransitionManager.EnsureInstance().LoadSceneSafe("MainMenu");
     }
 }

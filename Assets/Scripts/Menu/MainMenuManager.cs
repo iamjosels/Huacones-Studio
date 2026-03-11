@@ -1,5 +1,4 @@
 ﻿using UnityEngine;
-using UnityEngine.SceneManagement;
 
 public class MainMenuManager : MonoBehaviour
 {
@@ -15,7 +14,7 @@ public class MainMenuManager : MonoBehaviour
 
     public void Jugar()
     {
-        SceneManager.LoadScene(escenaJuego);
+        SceneTransitionManager.EnsureInstance().LoadSceneSafe(escenaJuego);
     }
 
     public void MostrarExtras()
@@ -26,7 +25,7 @@ public class MainMenuManager : MonoBehaviour
     public void MostrarTutorial()
     {
         CutsceneLoader.cutsceneToLoad = menuToTutorialCutscene;
-        SceneManager.LoadScene("CutsceneViewer");
+        SceneTransitionManager.EnsureInstance().LoadSceneSafe("CutsceneViewer");
     }
 
     public void Salir()

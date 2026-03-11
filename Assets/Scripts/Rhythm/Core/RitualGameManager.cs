@@ -23,6 +23,11 @@ public class RitualGameManager : MonoBehaviour
             Destroy(gameObject);
     }
 
+    private void Start()
+    {
+        WarmUpCutsceneAssets(ritmoToRoomCutscene);
+    }
+
     void Update()
     {
         if (!hasCheckedResult && musicSource != null && !musicSource.isPlaying && musicSource.time > 0.1f)
@@ -58,12 +63,30 @@ public class RitualGameManager : MonoBehaviour
     {
         // Mostrar cutscene antes de la escena "Room"
         CutsceneLoader.cutsceneToLoad = ritmoToRoomCutscene;
-        SceneManager.LoadScene("CutsceneViewer");
+        SceneTransitionManager.EnsureInstance().LoadSceneSafe("CutsceneViewer");
     }
 
     private void ReloadLevel()
     {
-        SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+        SceneTransitionManager.EnsureInstance().LoadSceneSafe(SceneManager.GetActiveScene().buildIndex);
+    }
+
+    private static void WarmUpCutsceneAssets(CutsceneData data)
+    {
+        if (data == null || data.images == null)
+        {
+            return;
+        }
+
+        foreach (Sprite sprite in data.images)
+        {
+            if (sprite == null)
+            {
+                continue;
+            }
+
+            _ = sprite.texture;
+        }
     }
 }
 
