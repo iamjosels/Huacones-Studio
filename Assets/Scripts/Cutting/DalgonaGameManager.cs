@@ -41,19 +41,19 @@ public class DalgonaGameManager : MonoBehaviour
     public float finishDelay = 0.35f;
 
     [Header("Completion Validation")]
-    [Range(0.3f, 1f)] public float strictManualRequiredCoverage = 0.9f;
-    [Range(0.5f, 1f)] public float strictManualCheckpointRatio = 0.98f;
+    [Range(0.3f, 1f)] public float strictManualRequiredCoverage = 0.82f;
+    [Range(0.5f, 1f)] public float strictManualCheckpointRatio = 0.78f;
     public bool requireManualCheckpoints = true;
-    public int manualCheckpointHitRadius = 6;
+    public int manualCheckpointHitRadius = 10;
 
     [Header("Mistake Feedback")]
     public bool useMistakeCounter = true;
     public bool useMistakesForOffPathDamage = true;
-    public int baseAllowedMistakes = 4;
-    public int allowedMistakeReductionPerRound = 1;
-    public int minimumAllowedMistakes = 2;
+    public int baseAllowedMistakes = 6;
+    public int allowedMistakeReductionPerRound = 0;
+    public int minimumAllowedMistakes = 4;
     public float mistakeCooldown = 0.22f;
-    public float damagePerMistake = 13f;
+    public float damagePerMistake = 9f;
 
     [Header("Needle and Damage")]
     public float offPathDamagePerSecond = 6f;
@@ -69,13 +69,13 @@ public class DalgonaGameManager : MonoBehaviour
 
     [Header("Path Detection")]
     public float minAlphaForPath = 0.1f;
-    public int detectionRadius = 4;
-    public int assistRadiusBonus = 5;
-    public int validBrushRadius = 5;
+    public int detectionRadius = 5;
+    public int assistRadiusBonus = 7;
+    public int validBrushRadius = 6;
     public int invalidBrushRadius = 1;
-    public int cutAssistFillRadius = 6;
-    public int cutAssistMaxPixelsPerHit = 220;
-    [Range(0f, 1f)] public float cutAssistFillStrength = 0.35f;
+    public int cutAssistFillRadius = 10;
+    public int cutAssistMaxPixelsPerHit = 320;
+    [Range(0f, 1f)] public float cutAssistFillStrength = 0.48f;
     public int minComponentPixels = 20;
     public bool ignoreEdgeConnectedPath = true;
     public bool fallbackToDarkLineDetection = true;
@@ -126,6 +126,8 @@ public class DalgonaGameManager : MonoBehaviour
 
     [Header("Runtime HUD")]
     public bool createRuntimeHud = false;
+    public bool showHudBars = false;
+    public bool showHudBottomText = false;
     public RectTransform hudRoot;
     public Vector2 hudAnchoredPosition = new Vector2(0f, -185f);
     public Vector2 hudSize = new Vector2(340f, 78f);
@@ -1856,7 +1858,7 @@ public class DalgonaGameManager : MonoBehaviour
 
     private bool ShouldUseRuntimeHud()
     {
-        return createRuntimeHud || useMistakeCounter;
+        return createRuntimeHud;
     }
 
     private string BuildIntroStatusMessage()
@@ -2061,32 +2063,63 @@ public class DalgonaGameManager : MonoBehaviour
             rootImage.raycastTarget = false;
         }
 
-        if (progressFill == null)
+        if (showHudBars && progressFill == null)
         {
             progressFill = CreateBarFill("ProgressBar", barSpacing, progressBarColor);
         }
 
-        if (integrityFill == null)
+        if (showHudBars && integrityFill == null)
         {
             integrityFill = CreateBarFill("IntegrityBar", 0f, integrityBarColor);
         }
 
-        if (pressureFill == null)
+        if (showHudBars && pressureFill == null)
         {
             pressureFill = CreateBarFill("PressureBar", -barSpacing, pressureBarColor);
         }
+
+        SetBarVisible(progressFill, showHudBars);
+        SetBarVisible(integrityFill, showHudBars);
+        SetBarVisible(pressureFill, showHudBars);
 
         if (hudTopText == null)
         {
             hudTopText = CreateHudLabel("TopText", hudTopTextOffset);
         }
+        else
+        {
+            hudTopText.rectTransform.anchoredPosition = hudTopTextOffset;
+        }
 
-        if (hudBottomText == null)
+        if (showHudBottomText && hudBottomText == null)
         {
             hudBottomText = CreateHudLabel("BottomText", hudBottomTextOffset);
         }
+        else if (hudBottomText != null)
+        {
+            hudBottomText.rectTransform.anchoredPosition = hudBottomTextOffset;
+        }
+
+        if (hudBottomText != null)
+        {
+            hudBottomText.gameObject.SetActive(showHudBottomText);
+        }
 
         ApplyHudTextStyle();
+    }
+
+    private void SetBarVisible(Image fillImage, bool visible)
+    {
+        if (fillImage == null)
+        {
+            return;
+        }
+
+        Transform barRoot = fillImage.transform.parent;
+        if (barRoot != null)
+        {
+            barRoot.gameObject.SetActive(visible);
+        }
     }
 
     private Image CreateBarFill(string barName, float yOffset, Color fillColor)
@@ -2175,20 +2208,20 @@ public class DalgonaGameManager : MonoBehaviour
 
         EnsureHudBuilt();
 
-        if (progressFill != null)
+        if (showHudBars && progressFill != null)
         {
             progressFill.fillAmount = GetProgress();
             progressFill.color = progressBarColor;
         }
 
-        if (integrityFill != null)
+        if (showHudBars && integrityFill != null)
         {
             float ratio = GetIntegrityRatio();
             integrityFill.fillAmount = ratio;
             integrityFill.color = Color.Lerp(failTint, integrityBarColor, ratio);
         }
 
-        if (pressureFill != null)
+        if (showHudBars && pressureFill != null)
         {
             pressureFill.fillAmount = Mathf.Clamp01(pressure);
             float danger = Mathf.InverseLerp(pressureThresholdToDamage, 1f, pressure);
@@ -2213,7 +2246,7 @@ public class DalgonaGameManager : MonoBehaviour
             }
         }
 
-        if (hudBottomText != null)
+        if (showHudBottomText && hudBottomText != null)
         {
             string checkpointInfo = string.Empty;
             if (manualMaskActive && requireManualCheckpoints && manualCheckpointPixels != null && manualCheckpointPixels.Length > 0)
