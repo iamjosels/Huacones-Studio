@@ -1,39 +1,7 @@
-﻿using UnityEngine;
-using UnityEngine.UI;
+using UnityEngine;
 
+[AddComponentMenu("Legacy/Do Not Use/TracePointSpawner")]
+[System.Obsolete("Legacy script kept as compatibility stub. Do not use in new content.")]
 public class TracePointSpawner : MonoBehaviour
 {
-    public RectTransform canvasRect;
-    public GameObject fadePointPrefab;
-    public float spawnInterval = 0.05f;
-
-    private float spawnTimer = 0f;
-
-    void Update()
-    {
-        if (Input.GetMouseButton(0))
-        {
-            spawnTimer += Time.deltaTime;
-
-            if (spawnTimer >= spawnInterval)
-            {
-                Vector2 pos;
-                RectTransformUtility.ScreenPointToLocalPointInRectangle(
-                    canvasRect,
-                    Input.mousePosition,
-                    null,
-                    out pos
-                );
-
-                GameObject dot = Instantiate(fadePointPrefab, canvasRect);
-                dot.GetComponent<RectTransform>().anchoredPosition = pos;
-
-                spawnTimer = 0f;
-            }
-        }
-        else
-        {
-            spawnTimer = spawnInterval;
-        }
-    }
 }

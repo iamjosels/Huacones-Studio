@@ -40,6 +40,21 @@ public class DalgonaGameManager : MonoBehaviour
     public float introLockDuration = 0.6f;
     public float finishDelay = 0.35f;
 
+    [Header("Completion Validation")]
+    [Range(0.3f, 1f)] public float strictManualRequiredCoverage = 0.9f;
+    [Range(0.5f, 1f)] public float strictManualCheckpointRatio = 0.98f;
+    public bool requireManualCheckpoints = true;
+    public int manualCheckpointHitRadius = 6;
+
+    [Header("Mistake Feedback")]
+    public bool useMistakeCounter = true;
+    public bool useMistakesForOffPathDamage = true;
+    public int baseAllowedMistakes = 4;
+    public int allowedMistakeReductionPerRound = 1;
+    public int minimumAllowedMistakes = 2;
+    public float mistakeCooldown = 0.22f;
+    public float damagePerMistake = 13f;
+
     [Header("Needle and Damage")]
     public float offPathDamagePerSecond = 6f;
     public float pressureDamagePerSecond = 8f;
@@ -69,11 +84,16 @@ public class DalgonaGameManager : MonoBehaviour
     public int minimumTargetPixelsToAcceptColorMask = 120;
 
     [Header("Manual Cut Path")]
-    public bool useManualCutPath = false;
+    public bool useManualCutPath = true;
+    public bool usePerRoundManualPathRoots = true;
+    public Transform manualPathRoundsRoot;
     public Transform manualPathPointsRoot;
     public bool manualPathClosed = true;
-    public float manualPathWidthUi = 42f;
-    public float manualPathSampleSpacingUi = 8f;
+    public float manualPathWidthUi = 52f;
+    public float manualPathSampleSpacingUi = 7f;
+    public bool autoCreateManualPathPoints = true;
+    [Range(4, 64)] public int defaultManualPointCount = 16;
+    [Range(0.1f, 0.9f)] public float defaultManualRadiusNormalized = 0.36f;
 
     [Header("Visual Feedback")]
     public Color neutralTint = Color.white;
@@ -115,6 +135,10 @@ public class DalgonaGameManager : MonoBehaviour
     public Color pressureBarColor = new Color(1f, 0.45f, 0.34f, 0.95f);
     public Vector2 barSize = new Vector2(292f, 14f);
     public float barSpacing = 21f;
+    public Color hudTextColor = new Color(0.08f, 0.08f, 0.08f, 0.96f);
+    public int hudTextSize = 17;
+    public Vector2 hudTopTextOffset = new Vector2(0f, 35f);
+    public Vector2 hudBottomTextOffset = new Vector2(0f, -35f);
 
     [Header("Performance")]
     public float textureApplyInterval = 0.02f;
@@ -155,6 +179,10 @@ public class DalgonaGameManager : MonoBehaviour
     private int textureHeight;
     private int targetPixelCount;
     private int visitedPixelCount;
+    private bool manualMaskActive;
+    private Vector2Int[] manualCheckpointPixels;
+    private bool[] manualCheckpointVisited;
+    private int manualCheckpointVisitedCount;
 
     private Coroutine tintRoutine;
     private Coroutine shakeRoutine;
@@ -163,6 +191,12 @@ public class DalgonaGameManager : MonoBehaviour
     private Image progressFill;
     private Image integrityFill;
     private Image pressureFill;
+    private TextMeshProUGUI hudTopText;
+    private TextMeshProUGUI hudBottomText;
+
+    private int allowedMistakes;
+    private int mistakesMade;
+    private float nextMistakeTime;
 
     private RectTransform scissorCursorRoot;
     private RectTransform scissorBladeTop;
@@ -185,6 +219,22 @@ public class DalgonaGameManager : MonoBehaviour
             cookieRect = galletaImage.rectTransform;
             cookieBasePosition = cookieRect.anchoredPosition;
         }
+    }
+
+    private void OnValidate()
+    {
+        manualPathWidthUi = Mathf.Max(1f, manualPathWidthUi);
+        manualPathSampleSpacingUi = Mathf.Max(0.5f, manualPathSampleSpacingUi);
+        defaultManualPointCount = Mathf.Clamp(defaultManualPointCount, 4, 64);
+        defaultManualRadiusNormalized = Mathf.Clamp(defaultManualRadiusNormalized, 0.1f, 0.9f);
+        strictManualRequiredCoverage = Mathf.Clamp01(strictManualRequiredCoverage);
+        strictManualCheckpointRatio = Mathf.Clamp01(strictManualCheckpointRatio);
+        manualCheckpointHitRadius = Mathf.Max(1, manualCheckpointHitRadius);
+        baseAllowedMistakes = Mathf.Max(1, baseAllowedMistakes);
+        minimumAllowedMistakes = Mathf.Max(1, minimumAllowedMistakes);
+        allowedMistakeReductionPerRound = Mathf.Max(0, allowedMistakeReductionPerRound);
+        mistakeCooldown = Mathf.Max(0.01f, mistakeCooldown);
+        hudTextSize = Mathf.Clamp(hudTextSize, 10, 44);
     }
 
     private void OnEnable()
@@ -245,6 +295,133 @@ public class DalgonaGameManager : MonoBehaviour
         }
     }
 
+    public int GetAuthoringRoundCount()
+    {
+        return GetManualPathRoundCount();
+    }
+
+    public Texture2D GetTextureForRound(int round)
+    {
+        if (figurasPorRonda != null && figurasPorRonda.Count > 0)
+        {
+            int index = Mathf.Clamp(round - 1, 0, figurasPorRonda.Count - 1);
+            return figurasPorRonda[index];
+        }
+
+        return galletaImage != null ? galletaImage.texture as Texture2D : null;
+    }
+
+    public void PreviewRoundTextureInEditor(int round)
+    {
+        if (galletaImage == null || Application.isPlaying)
+        {
+            return;
+        }
+
+        Texture2D preview = GetTextureForRound(Mathf.Max(1, round));
+        if (preview != null)
+        {
+            galletaImage.texture = preview;
+        }
+    }
+
+    public bool TryEditorWorldToTexturePixel(Vector3 worldPosition, int round, out Vector2Int pixel)
+    {
+        pixel = default;
+
+        if (galletaImage == null)
+        {
+            return false;
+        }
+
+        Texture2D texture = GetTextureForRound(round);
+        if (texture == null)
+        {
+            return false;
+        }
+
+        RectTransform rectTransform = galletaImage.rectTransform;
+        Rect rect = rectTransform.rect;
+        if (Mathf.Abs(rect.width) < 0.0001f || Mathf.Abs(rect.height) < 0.0001f)
+        {
+            return false;
+        }
+
+        Vector2 local = rectTransform.InverseTransformPoint(worldPosition);
+        float u = (local.x - rect.x) / rect.width;
+        float v = (local.y - rect.y) / rect.height;
+        if (u < 0f || u > 1f || v < 0f || v > 1f)
+        {
+            return false;
+        }
+
+        int x = Mathf.Clamp(Mathf.RoundToInt(u * (texture.width - 1)), 0, texture.width - 1);
+        int y = Mathf.Clamp(Mathf.RoundToInt(v * (texture.height - 1)), 0, texture.height - 1);
+        pixel = new Vector2Int(x, y);
+        return true;
+    }
+
+    public bool TryEditorTexturePixelToWorld(Vector2Int pixel, int round, out Vector3 worldPosition)
+    {
+        worldPosition = default;
+
+        if (galletaImage == null)
+        {
+            return false;
+        }
+
+        Texture2D texture = GetTextureForRound(round);
+        if (texture == null || texture.width <= 1 || texture.height <= 1)
+        {
+            return false;
+        }
+
+        RectTransform rectTransform = galletaImage.rectTransform;
+        Rect rect = rectTransform.rect;
+        if (Mathf.Abs(rect.width) < 0.0001f || Mathf.Abs(rect.height) < 0.0001f)
+        {
+            return false;
+        }
+
+        int px = Mathf.Clamp(pixel.x, 0, texture.width - 1);
+        int py = Mathf.Clamp(pixel.y, 0, texture.height - 1);
+
+        float u = px / (float)(texture.width - 1);
+        float v = py / (float)(texture.height - 1);
+        float localX = rect.x + (u * rect.width);
+        float localY = rect.y + (v * rect.height);
+
+        worldPosition = rectTransform.TransformPoint(new Vector3(localX, localY, 0f));
+        return true;
+    }
+
+    public Transform GetOrCreateManualPathRootForRound(int round, bool rebuildPoints)
+    {
+        int previousRound = ronda;
+        ronda = Mathf.Max(1, round);
+
+        EnsureManualPathSetup(rebuildPoints);
+        Transform root = ResolveManualPathPointsRootForCurrentRound();
+
+        ronda = previousRound;
+        return root;
+    }
+
+    public Transform GetManualPathRootForRound(int round)
+    {
+        int previousRound = ronda;
+        ronda = Mathf.Max(1, round);
+        Transform root = ResolveManualPathPointsRootForCurrentRound();
+        ronda = previousRound;
+        return root;
+    }
+
+    [ContextMenu("Manual Path/Recreate Placeholder Points")]
+    private void RecreateManualPathPlaceholderPoints()
+    {
+        EnsureManualPathSetup(true);
+    }
+
     private void Update()
     {
         if (state == MatchState.Disabled || state == MatchState.Won || state == MatchState.Lost)
@@ -274,7 +451,7 @@ public class DalgonaGameManager : MonoBehaviour
             if (Time.time >= introEndTime)
             {
                 state = MatchState.Playing;
-                UpdateStatus("Corta el contorno con la tijera.");
+                UpdateStatus(BuildPlayingStatusMessage());
             }
 
             UpdateHud();
@@ -327,10 +504,18 @@ public class DalgonaGameManager : MonoBehaviour
 
         if (touchedOffPath)
         {
-            ApplyDamage(offPathDamagePerSecond * dt);
+            if (useMistakeCounter)
+            {
+                RegisterMistake();
+            }
+
+            if (!useMistakeCounter || !useMistakesForOffPathDamage)
+            {
+                ApplyDamage(offPathDamagePerSecond * dt);
+            }
         }
 
-        if (GetProgress() >= requiredCoverage)
+        if (HasReachedWinCondition())
         {
             CompleteMatch(true, "Exito");
             return;
@@ -340,6 +525,290 @@ public class DalgonaGameManager : MonoBehaviour
         UpdateHud();
         RefreshCookieTint();
         ApplyRuntimeTextureIfNeeded();
+    }
+
+    private void EnsureManualPathSetup(bool forceRebuild)
+    {
+        if (!useManualCutPath || !autoCreateManualPathPoints)
+        {
+            return;
+        }
+
+        if (usePerRoundManualPathRoots)
+        {
+            if (!EnsureManualPathRoundsRootExists())
+            {
+                return;
+            }
+
+            if (forceRebuild)
+            {
+                ClearManualPathChildren(manualPathRoundsRoot);
+            }
+
+            EnsureRoundManualPathRoots(GetManualPathRoundCount());
+            manualPathPointsRoot = ResolveManualPathPointsRootForCurrentRound();
+            return;
+        }
+
+        if (!EnsureManualPathRootExists())
+        {
+            return;
+        }
+
+        if (forceRebuild)
+        {
+            ClearManualPathChildren(manualPathPointsRoot);
+        }
+
+        if (manualPathPointsRoot == null)
+        {
+            return;
+        }
+
+        if (manualPathPointsRoot.childCount == 0)
+        {
+            CreateDefaultManualPathPoints(manualPathPointsRoot);
+        }
+    }
+
+    private int GetManualPathRoundCount()
+    {
+        int fromTextures = figurasPorRonda != null ? figurasPorRonda.Count : 0;
+        return Mathf.Max(3, fromTextures);
+    }
+
+    private bool TryResolveManualPathParent(out Transform parent, out bool useRectTransforms)
+    {
+        parent = transform;
+        useRectTransforms = false;
+
+        if (galletaImage != null)
+        {
+            parent = galletaImage.rectTransform;
+            useRectTransforms = true;
+        }
+
+        return parent != null;
+    }
+
+    private void ConfigurePathRootTransform(Transform root)
+    {
+        if (root is RectTransform rectRoot)
+        {
+            rectRoot.anchorMin = new Vector2(0.5f, 0.5f);
+            rectRoot.anchorMax = new Vector2(0.5f, 0.5f);
+            rectRoot.pivot = new Vector2(0.5f, 0.5f);
+            rectRoot.sizeDelta = Vector2.zero;
+            rectRoot.anchoredPosition = Vector2.zero;
+        }
+    }
+
+    private bool EnsureManualPathRoundsRootExists()
+    {
+        if (manualPathRoundsRoot != null)
+        {
+            return true;
+        }
+
+        if (!TryResolveManualPathParent(out Transform parent, out bool useRectTransforms))
+        {
+            return false;
+        }
+
+        GameObject roundsRootObject = new GameObject("ManualCutPathsByRound", useRectTransforms ? typeof(RectTransform) : typeof(Transform));
+        manualPathRoundsRoot = roundsRootObject.transform;
+        manualPathRoundsRoot.SetParent(parent, false);
+        ConfigurePathRootTransform(manualPathRoundsRoot);
+
+        if (manualPathPointsRoot != null && manualPathPointsRoot != manualPathRoundsRoot)
+        {
+            manualPathPointsRoot.SetParent(manualPathRoundsRoot, false);
+            manualPathPointsRoot.name = "Round_1";
+        }
+
+        return true;
+    }
+
+    private void EnsureRoundManualPathRoots(int roundCount)
+    {
+        if (manualPathRoundsRoot == null)
+        {
+            return;
+        }
+
+        int clampedRoundCount = Mathf.Max(1, roundCount);
+        for (int round = 1; round <= clampedRoundCount; round++)
+        {
+            Transform roundRoot = FindManualPathRoundRoot(round);
+            if (roundRoot == null)
+            {
+                roundRoot = CreateManualRoundRoot(round);
+            }
+
+            if (roundRoot != null && roundRoot.childCount == 0)
+            {
+                CreateDefaultManualPathPoints(roundRoot);
+            }
+        }
+
+        if (manualPathPointsRoot == null)
+        {
+            manualPathPointsRoot = FindManualPathRoundRoot(1);
+        }
+    }
+
+    private Transform CreateManualRoundRoot(int round)
+    {
+        if (manualPathRoundsRoot == null)
+        {
+            return null;
+        }
+
+        bool useRectTransforms = manualPathRoundsRoot is RectTransform;
+        GameObject roundObject = new GameObject($"Round_{round}", useRectTransforms ? typeof(RectTransform) : typeof(Transform));
+        Transform roundRoot = roundObject.transform;
+        roundRoot.SetParent(manualPathRoundsRoot, false);
+        ConfigurePathRootTransform(roundRoot);
+        return roundRoot;
+    }
+
+    private Transform FindManualPathRoundRoot(int round)
+    {
+        if (manualPathRoundsRoot == null)
+        {
+            return null;
+        }
+
+        string expectedName = $"Round_{round}";
+        Transform byName = manualPathRoundsRoot.Find(expectedName);
+        if (byName != null)
+        {
+            return byName;
+        }
+
+        int index = round - 1;
+        if (index >= 0 && index < manualPathRoundsRoot.childCount)
+        {
+            return manualPathRoundsRoot.GetChild(index);
+        }
+
+        return null;
+    }
+
+    private Transform ResolveManualPathPointsRootForCurrentRound()
+    {
+        if (usePerRoundManualPathRoots && manualPathRoundsRoot != null)
+        {
+            Transform byRound = FindManualPathRoundRoot(ronda);
+            if (byRound != null)
+            {
+                return byRound;
+            }
+
+            if (manualPathRoundsRoot.childCount > 0)
+            {
+                int index = Mathf.Clamp(ronda - 1, 0, manualPathRoundsRoot.childCount - 1);
+                return manualPathRoundsRoot.GetChild(index);
+            }
+        }
+
+        return manualPathPointsRoot;
+    }
+
+    private bool EnsureManualPathRootExists()
+    {
+        if (manualPathPointsRoot != null)
+        {
+            return true;
+        }
+
+        if (!TryResolveManualPathParent(out Transform parent, out bool useRectTransforms))
+        {
+            return false;
+        }
+
+        GameObject rootObject = new GameObject("ManualCutPathRoot", useRectTransforms ? typeof(RectTransform) : typeof(Transform));
+        manualPathPointsRoot = rootObject.transform;
+        manualPathPointsRoot.SetParent(parent, false);
+        ConfigurePathRootTransform(manualPathPointsRoot);
+
+        return true;
+    }
+
+    private void ClearManualPathChildren(Transform root)
+    {
+        if (root == null)
+        {
+            return;
+        }
+
+        for (int i = root.childCount - 1; i >= 0; i--)
+        {
+            Transform child = root.GetChild(i);
+            if (child == null)
+            {
+                continue;
+            }
+
+            if (Application.isPlaying)
+            {
+                Destroy(child.gameObject);
+            }
+            else
+            {
+                DestroyImmediate(child.gameObject);
+            }
+        }
+    }
+
+    private void CreateDefaultManualPathPoints(Transform pointsRoot)
+    {
+        if (pointsRoot == null)
+        {
+            return;
+        }
+
+        int count = Mathf.Clamp(defaultManualPointCount, 4, 64);
+        float radiusFactor = Mathf.Clamp(defaultManualRadiusNormalized, 0.1f, 0.9f);
+
+        bool useRectTransforms = pointsRoot is RectTransform;
+        float radiusX = 120f;
+        float radiusY = 120f;
+
+        if (galletaImage != null)
+        {
+            Rect cookieRect = galletaImage.rectTransform.rect;
+            radiusX = Mathf.Max(20f, Mathf.Abs(cookieRect.width) * radiusFactor);
+            radiusY = Mathf.Max(20f, Mathf.Abs(cookieRect.height) * radiusFactor);
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            float t = i / (float)count;
+            float angle = t * Mathf.PI * 2f;
+            Vector2 point = new Vector2(Mathf.Cos(angle) * radiusX, Mathf.Sin(angle) * radiusY);
+            string pointName = $"P{(i + 1):00}";
+
+            if (useRectTransforms)
+            {
+                GameObject pointObject = new GameObject(pointName, typeof(RectTransform));
+                RectTransform pointRect = pointObject.GetComponent<RectTransform>();
+                pointRect.SetParent(pointsRoot, false);
+                pointRect.anchorMin = new Vector2(0.5f, 0.5f);
+                pointRect.anchorMax = new Vector2(0.5f, 0.5f);
+                pointRect.pivot = new Vector2(0.5f, 0.5f);
+                pointRect.sizeDelta = new Vector2(12f, 12f);
+                pointRect.anchoredPosition = point;
+            }
+            else
+            {
+                GameObject pointObject = new GameObject(pointName, typeof(Transform));
+                Transform pointTransform = pointObject.transform;
+                pointTransform.SetParent(pointsRoot, false);
+                pointTransform.localPosition = new Vector3(point.x, point.y, 0f);
+            }
+        }
     }
 
     private void StartRound()
@@ -377,6 +846,7 @@ public class DalgonaGameManager : MonoBehaviour
             return;
         }
 
+        EnsureManualPathSetup(false);
         BuildTargetMask();
         if (targetPixelCount <= 0)
         {
@@ -387,13 +857,20 @@ public class DalgonaGameManager : MonoBehaviour
 
         timeLimit = Mathf.Max(minimumTimeLimit, baseTimeLimit - (ronda - 1) * timeLimitReductionPerRound);
         requiredCoverage = Mathf.Clamp(baseRequiredCoverage + (ronda - 1) * coverageIncreasePerRound, 0.3f, maximumRequiredCoverage);
+        if (manualMaskActive)
+        {
+            requiredCoverage = Mathf.Max(requiredCoverage, strictManualRequiredCoverage);
+        }
         maxIntegrity = Mathf.Max(minimumIntegrity, baseIntegrity - (ronda - 1) * integrityReductionPerRound);
+        allowedMistakes = Mathf.Max(minimumAllowedMistakes, baseAllowedMistakes - ((ronda - 1) * allowedMistakeReductionPerRound));
+        mistakesMade = 0;
+        nextMistakeTime = 0f;
 
         timeLeft = timeLimit;
         integrity = maxIntegrity;
         pressure = 0f;
 
-        if (createRuntimeHud)
+        if (ShouldUseRuntimeHud())
         {
             EnsureHudBuilt();
             if (hudRoot != null)
@@ -417,7 +894,7 @@ public class DalgonaGameManager : MonoBehaviour
             statusText.gameObject.SetActive(useStatusText);
         }
 
-        UpdateStatus("Preparate para cortar...");
+        UpdateStatus(BuildIntroStatusMessage());
         RefreshCookieTint();
 
         state = MatchState.Intro;
@@ -426,13 +903,7 @@ public class DalgonaGameManager : MonoBehaviour
 
     private Texture2D ResolveTextureForCurrentRound()
     {
-        if (figurasPorRonda != null && figurasPorRonda.Count > 0)
-        {
-            int index = Mathf.Clamp(ronda - 1, 0, figurasPorRonda.Count - 1);
-            return figurasPorRonda[index];
-        }
-
-        return galletaImage != null ? galletaImage.texture as Texture2D : null;
+        return GetTextureForRound(ronda);
     }
 
     private bool BuildRuntimeTexture(Texture2D texture)
@@ -523,18 +994,28 @@ public class DalgonaGameManager : MonoBehaviour
         textureHeight = 0;
         targetPixelCount = 0;
         visitedPixelCount = 0;
+        manualMaskActive = false;
+        manualCheckpointPixels = null;
+        manualCheckpointVisited = null;
+        manualCheckpointVisitedCount = 0;
+        allowedMistakes = 0;
+        mistakesMade = 0;
+        nextMistakeTime = 0f;
     }
 
     private void BuildTargetMask()
     {
         targetMask = new bool[sourcePixels.Length];
         visitedMask = new bool[sourcePixels.Length];
+        manualMaskActive = false;
+        ClearManualCheckpointProgress();
 
         if (TryBuildManualTargetMask(out bool[] manualMask, out int manualCount))
         {
             targetMask = manualMask;
             targetPixelCount = manualCount;
             visitedPixelCount = 0;
+            manualMaskActive = true;
             return;
         }
 
@@ -552,6 +1033,8 @@ public class DalgonaGameManager : MonoBehaviour
         targetMask = filteredMask;
         targetPixelCount = filteredCount;
         visitedPixelCount = 0;
+        manualMaskActive = false;
+        ClearManualCheckpointProgress();
     }
 
     private bool TryBuildManualTargetMask(out bool[] mask, out int count)
@@ -559,13 +1042,14 @@ public class DalgonaGameManager : MonoBehaviour
         mask = null;
         count = 0;
 
-        if (!useManualCutPath || manualPathPointsRoot == null || galletaImage == null)
+        Transform pointsRoot = ResolveManualPathPointsRootForCurrentRound();
+        if (!useManualCutPath || pointsRoot == null || galletaImage == null)
         {
             return false;
         }
 
         List<Vector2Int> points = new List<Vector2Int>(16);
-        foreach (Transform child in manualPathPointsRoot)
+        foreach (Transform child in pointsRoot)
         {
             if (!child.gameObject.activeInHierarchy)
             {
@@ -580,6 +1064,7 @@ public class DalgonaGameManager : MonoBehaviour
 
         if (points.Count < 2)
         {
+            ClearManualCheckpointProgress();
             return false;
         }
 
@@ -598,6 +1083,7 @@ public class DalgonaGameManager : MonoBehaviour
             RasterizeManualSegment(mask, points[points.Count - 1], points[0], radius, sampleStepPx);
         }
 
+        SetupManualCheckpointProgress(points);
         count = CountMaskTrue(mask);
         return count > 0;
     }
@@ -807,6 +1293,66 @@ public class DalgonaGameManager : MonoBehaviour
         }
 
         return count;
+    }
+
+    private void ClearManualCheckpointProgress()
+    {
+        manualCheckpointPixels = null;
+        manualCheckpointVisited = null;
+        manualCheckpointVisitedCount = 0;
+    }
+
+    private void SetupManualCheckpointProgress(List<Vector2Int> points)
+    {
+        if (!requireManualCheckpoints || points == null || points.Count == 0)
+        {
+            ClearManualCheckpointProgress();
+            return;
+        }
+
+        manualCheckpointPixels = points.ToArray();
+        manualCheckpointVisited = new bool[manualCheckpointPixels.Length];
+        manualCheckpointVisitedCount = 0;
+    }
+
+    private void MarkManualCheckpointHit(int x, int y)
+    {
+        if (!manualMaskActive || !requireManualCheckpoints || manualCheckpointPixels == null || manualCheckpointVisited == null)
+        {
+            return;
+        }
+
+        int radius = Mathf.Max(1, manualCheckpointHitRadius + GetEffectiveValidBrushRadius());
+        int sqr = radius * radius;
+
+        for (int i = 0; i < manualCheckpointPixels.Length; i++)
+        {
+            if (manualCheckpointVisited[i])
+            {
+                continue;
+            }
+
+            Vector2Int p = manualCheckpointPixels[i];
+            int dx = p.x - x;
+            int dy = p.y - y;
+            if ((dx * dx) + (dy * dy) > sqr)
+            {
+                continue;
+            }
+
+            manualCheckpointVisited[i] = true;
+            manualCheckpointVisitedCount++;
+        }
+    }
+
+    private float GetManualCheckpointRatio()
+    {
+        if (manualCheckpointPixels == null || manualCheckpointPixels.Length == 0)
+        {
+            return 1f;
+        }
+
+        return Mathf.Clamp01(manualCheckpointVisitedCount / (float)manualCheckpointPixels.Length);
     }
 
     private void ReadPointerState(out bool down, out bool held, out bool up, out Vector2 screenPosition)
@@ -1037,6 +1583,7 @@ public class DalgonaGameManager : MonoBehaviour
     {
         PaintBrush(centerX, centerY, GetEffectiveValidBrushRadius(), tracedPathColor, tracedPaintStrength, true, true, false);
         ApplyCutAssistArea(centerX, centerY);
+        MarkManualCheckpointHit(centerX, centerY);
     }
 
     private void PaintInvalid(int centerX, int centerY)
@@ -1257,6 +1804,81 @@ public class DalgonaGameManager : MonoBehaviour
         return Mathf.Clamp01(integrity / maxIntegrity);
     }
 
+    private bool HasReachedWinCondition()
+    {
+        if (GetProgress() < requiredCoverage)
+        {
+            return false;
+        }
+
+        if (!manualMaskActive || !requireManualCheckpoints)
+        {
+            return true;
+        }
+
+        return GetManualCheckpointRatio() >= strictManualCheckpointRatio;
+    }
+
+    private void RegisterMistake()
+    {
+        if (!useMistakeCounter || state != MatchState.Playing)
+        {
+            return;
+        }
+
+        if (Time.time < nextMistakeTime)
+        {
+            return;
+        }
+
+        nextMistakeTime = Time.time + Mathf.Max(0.01f, mistakeCooldown);
+        mistakesMade = Mathf.Min(allowedMistakes, mistakesMade + 1);
+
+        if (damagePerMistake > 0f)
+        {
+            ApplyDamage(damagePerMistake);
+            if (state != MatchState.Playing)
+            {
+                return;
+            }
+        }
+
+        FlashTint(warningTint);
+        StartShake(1.4f);
+        UpdateStatus(BuildPlayingStatusMessage());
+        UpdateHud();
+
+        if (mistakesMade >= allowedMistakes)
+        {
+            CompleteMatch(false, "Demasiados errores");
+        }
+    }
+
+    private bool ShouldUseRuntimeHud()
+    {
+        return createRuntimeHud || useMistakeCounter;
+    }
+
+    private string BuildIntroStatusMessage()
+    {
+        if (!useMistakeCounter)
+        {
+            return "Preparate para cortar...";
+        }
+
+        return $"Preparate: tienes {allowedMistakes} errores maximos.";
+    }
+
+    private string BuildPlayingStatusMessage()
+    {
+        if (!useMistakeCounter)
+        {
+            return "Corta el contorno con la tijera.";
+        }
+
+        return $"Corta el contorno. Errores {mistakesMade}/{allowedMistakes}.";
+    }
+
     private void RefreshCookieTint()
     {
         if (galletaImage == null || tintOverrideActive || state == MatchState.Won || state == MatchState.Lost)
@@ -1408,7 +2030,7 @@ public class DalgonaGameManager : MonoBehaviour
 
     private void EnsureHudBuilt()
     {
-        if (!createRuntimeHud || galletaImage == null)
+        if (!ShouldUseRuntimeHud() || galletaImage == null)
         {
             return;
         }
@@ -1453,6 +2075,18 @@ public class DalgonaGameManager : MonoBehaviour
         {
             pressureFill = CreateBarFill("PressureBar", -barSpacing, pressureBarColor);
         }
+
+        if (hudTopText == null)
+        {
+            hudTopText = CreateHudLabel("TopText", hudTopTextOffset);
+        }
+
+        if (hudBottomText == null)
+        {
+            hudBottomText = CreateHudLabel("BottomText", hudBottomTextOffset);
+        }
+
+        ApplyHudTextStyle();
     }
 
     private Image CreateBarFill(string barName, float yOffset, Color fillColor)
@@ -1493,9 +2127,48 @@ public class DalgonaGameManager : MonoBehaviour
         return fillImage;
     }
 
+    private TextMeshProUGUI CreateHudLabel(string name, Vector2 anchoredPosition)
+    {
+        if (hudRoot == null)
+        {
+            return null;
+        }
+
+        GameObject textObject = new GameObject(name, typeof(RectTransform), typeof(TextMeshProUGUI));
+        RectTransform textRect = textObject.GetComponent<RectTransform>();
+        textRect.SetParent(hudRoot, false);
+        textRect.anchorMin = new Vector2(0.5f, 0.5f);
+        textRect.anchorMax = new Vector2(0.5f, 0.5f);
+        textRect.pivot = new Vector2(0.5f, 0.5f);
+        textRect.anchoredPosition = anchoredPosition;
+        textRect.sizeDelta = new Vector2(Mathf.Max(120f, hudSize.x - 18f), 24f);
+
+        TextMeshProUGUI label = textObject.GetComponent<TextMeshProUGUI>();
+        label.text = string.Empty;
+        label.alignment = TextAlignmentOptions.Center;
+        label.textWrappingMode = TextWrappingModes.NoWrap;
+        label.raycastTarget = false;
+        return label;
+    }
+
+    private void ApplyHudTextStyle()
+    {
+        if (hudTopText != null)
+        {
+            hudTopText.fontSize = hudTextSize;
+            hudTopText.color = hudTextColor;
+        }
+
+        if (hudBottomText != null)
+        {
+            hudBottomText.fontSize = hudTextSize;
+            hudBottomText.color = hudTextColor;
+        }
+    }
+
     private void UpdateHud(bool force = false)
     {
-        if (!createRuntimeHud)
+        if (!ShouldUseRuntimeHud())
         {
             return;
         }
@@ -1520,6 +2193,36 @@ public class DalgonaGameManager : MonoBehaviour
             pressureFill.fillAmount = Mathf.Clamp01(pressure);
             float danger = Mathf.InverseLerp(pressureThresholdToDamage, 1f, pressure);
             pressureFill.color = Color.Lerp(pressureBarColor, failTint, danger);
+        }
+
+        float progressPercent = GetProgress() * 100f;
+        int requiredPercent = Mathf.RoundToInt(requiredCoverage * 100f);
+        if (hudTopText != null)
+        {
+            string mistakesInfo = useMistakeCounter
+                ? $"Errores: {mistakesMade}/{allowedMistakes}"
+                : $"Integridad: {Mathf.RoundToInt(GetIntegrityRatio() * 100f)}%";
+            hudTopText.text = $"{mistakesInfo}   Tiempo: {Mathf.CeilToInt(timeLeft)}";
+            if (useMistakeCounter && allowedMistakes > 0 && mistakesMade >= allowedMistakes - 1)
+            {
+                hudTopText.color = failTint;
+            }
+            else
+            {
+                hudTopText.color = hudTextColor;
+            }
+        }
+
+        if (hudBottomText != null)
+        {
+            string checkpointInfo = string.Empty;
+            if (manualMaskActive && requireManualCheckpoints && manualCheckpointPixels != null && manualCheckpointPixels.Length > 0)
+            {
+                checkpointInfo = $" | Puntos: {manualCheckpointVisitedCount}/{manualCheckpointPixels.Length}";
+            }
+
+            hudBottomText.text = $"Progreso: {Mathf.RoundToInt(progressPercent)}%/{requiredPercent}%{checkpointInfo}";
+            hudBottomText.color = hudTextColor;
         }
 
         if (force)
